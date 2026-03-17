@@ -59,6 +59,7 @@ python -m s2t --manual --debug # 组合使用
 ## 测试
 
 ```bash
+export HF_TOKEN=你的token
 conda activate s2t
 python tests/test_pipeline.py
 ```
