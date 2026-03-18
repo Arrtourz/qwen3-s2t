@@ -1,3 +1,17 @@
+# s2t for Linux
+
+This folder preserves the original Ubuntu-oriented implementation from the repository before the Windows tray app refactor.
+
+It targets:
+
+- Ubuntu
+- PulseAudio / PipeWire
+- X11 / Wayland helpers such as `xclip`, `xdotool`, `wtype`
+
+The code here is kept as a historical Linux version and is not the active development target for the current project.
+
+## Original README
+
 # s2t — Ubuntu 语音输入工具
 
 类 Win+H / MySuperWhisper，基于 Qwen3-ASR-1.7B，全局热键触发，转写后自动粘贴。
@@ -27,7 +41,6 @@ conda activate s2t
 pip install -r requirements.txt
 conda install -c conda-forge xclip
 ```
-
 
 ## 启动
 

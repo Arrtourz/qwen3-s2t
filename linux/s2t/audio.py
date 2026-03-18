@@ -10,14 +10,15 @@ import logging
 import os
 import subprocess
 import threading
+
 import numpy as np
 
-log = logging.getLogger('s2t')
+log = logging.getLogger("s2t")
 
 SAMPLE_RATE = 16000  # Qwen3-ASR expects 16kHz
 _CHUNK_SIZE = 4096
 # Max chunks for 60s window (continuous mode only)
-_MAX_CHUNKS_60S = int(60 * SAMPLE_RATE * 2 / _CHUNK_SIZE)  # ≈ 469
+_MAX_CHUNKS_60S = int(60 * SAMPLE_RATE * 2 / _CHUNK_SIZE)  # ~= 469
 
 _proc = None
 _reader_thread = None
@@ -29,25 +30,26 @@ def _get_pulse_input_source():
     """Return the first real (non-monitor) PulseAudio input source name, or None."""
     try:
         result = subprocess.run(
-            ['pactl', 'list', 'sources', 'short'],
-            capture_output=True, text=True, timeout=5,
+            ["pactl", "list", "sources", "short"],
+            capture_output=True,
+            text=True,
+            timeout=5,
             env=os.environ.copy(),
         )
         for line in result.stdout.strip().splitlines():
-            parts = line.split('\t')
+            parts = line.split("\t")
             if len(parts) >= 2:
                 name = parts[1]
-                if '.monitor' not in name and 'input' in name:
+                if ".monitor" not in name and "input" in name:
                     return name
-        # fallback: any non-monitor source
         for line in result.stdout.strip().splitlines():
-            parts = line.split('\t')
+            parts = line.split("\t")
             if len(parts) >= 2:
                 name = parts[1]
-                if '.monitor' not in name:
+                if ".monitor" not in name:
                     return name
-    except Exception as e:
-        log.warning(f"pactl error: {e}")
+    except Exception as exc:
+        log.warning("pactl error: %s", exc)
     return None
 
 
@@ -64,21 +66,24 @@ def _reader_loop(proc):
 def check_mic_permission():
     """Try spawning parec briefly. Returns error string or None if OK."""
     source = _get_pulse_input_source()
-    cmd = ['parec', '--rate=16000', '--channels=1', '--format=s16le']
+    cmd = ["parec", "--rate=16000", "--channels=1", "--format=s16le"]
     if source:
-        cmd += [f'--device={source}']
+        cmd += [f"--device={source}"]
     try:
         proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             env=os.environ.copy(),
         )
         import time as _t
+
         _t.sleep(0.2)
         proc.terminate()
         proc.wait(timeout=2)
         return None
-    except Exception as e:
-        return str(e)
+    except Exception as exc:
+        return str(exc)
 
 
 def open_mic():
@@ -88,23 +93,25 @@ def open_mic():
         return True
 
     source = _get_pulse_input_source()
-    cmd = ['parec', '--rate=16000', '--channels=1', '--format=s16le', '--latency-msec=50']
+    cmd = ["parec", "--rate=16000", "--channels=1", "--format=s16le", "--latency-msec=50"]
     if source:
-        cmd += [f'--device={source}']
-        log.info(f"Using mic: {source}")
+        cmd += [f"--device={source}"]
+        log.info("Using mic: %s", source)
     else:
         log.warning("No mic source found, using PulseAudio default")
 
     try:
         _proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
             env=os.environ.copy(),
         )
         _reader_thread = threading.Thread(target=_reader_loop, args=(_proc,), daemon=True)
         _reader_thread.start()
         return True
-    except Exception as e:
-        log.error(f"Cannot open mic: {e}")
+    except Exception as exc:
+        log.error("Cannot open mic: %s", exc)
         _proc = None
         return False
 
@@ -142,29 +149,27 @@ def start_recording(windowed: bool = False):
 
 
 def stop_recording(debug_dir=None):
-    """Stop capturing and close mic. Returns captured numpy array or None.
-
-    If debug_dir is set, saves the captured audio as a WAV file there.
-    """
+    """Stop capturing and close mic. Returns captured numpy array or None."""
     global _is_recording
     _is_recording = False
     close_mic()
     if not _raw_chunks:
-        log.error("Buffer is EMPTY — no audio captured at all.")
+        log.error("Buffer is EMPTY - no audio captured at all.")
         return None
-    raw = b''.join(_raw_chunks)
+    raw = b"".join(_raw_chunks)
     audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-    rms = float(np.sqrt(np.mean(audio ** 2)))
+    rms = float(np.sqrt(np.mean(audio**2)))
     peak = float(np.max(np.abs(audio)))
     dur = len(audio) / SAMPLE_RATE
-    log.info(f"Captured {len(audio)} samples ({dur:.2f}s), RMS={rms:.6f}, peak={peak:.6f}")
+    log.info("Captured %s samples (%.2fs), RMS=%.6f, peak=%.6f", len(audio), dur, rms, peak)
     if debug_dir:
         import soundfile as sf
         import time as _t
+
         os.makedirs(debug_dir, exist_ok=True)
         path = os.path.join(debug_dir, f"rec_{int(_t.time())}.wav")
         sf.write(path, audio, SAMPLE_RATE)
-        log.info(f"Saved debug WAV: {path}")
+        log.info("Saved debug WAV: %s", path)
     return audio
 
 
@@ -175,18 +180,19 @@ def snapshot_recording(debug_dir=None):
     _raw_chunks.clear()
     if not chunks:
         return None
-    raw = b''.join(chunks)
+    raw = b"".join(chunks)
     audio_data = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-    rms = float(np.sqrt(np.mean(audio_data ** 2)))
+    rms = float(np.sqrt(np.mean(audio_data**2)))
     dur = len(audio_data) / SAMPLE_RATE
-    log.info(f"Snapshot {len(audio_data)} samples ({dur:.2f}s), RMS={rms:.6f}")
+    log.info("Snapshot %s samples (%.2fs), RMS=%.6f", len(audio_data), dur, rms)
     if debug_dir:
         import soundfile as sf
         import time as _t
+
         os.makedirs(debug_dir, exist_ok=True)
         path = os.path.join(debug_dir, f"snap_{int(_t.time())}.wav")
         sf.write(path, audio_data, SAMPLE_RATE)
-        log.info(f"Saved debug WAV: {path}")
+        log.info("Saved debug WAV: %s", path)
     return audio_data
 
 
