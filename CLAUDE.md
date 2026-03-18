@@ -5,10 +5,10 @@ This file provides guidance to Claude Code when working with code in this reposi
 ## Repository Layout
 
 - `windows/` contains the active Windows 11 tray app.
-- `linux/` contains the archived original Ubuntu / PulseAudio implementation.
+- `linux/` contains the Ubuntu / PulseAudio implementation with aligned model and device runtime options.
 - Repository root only coordinates the subprojects and shared documentation.
 
-Prefer working in `windows/` unless the task explicitly targets the legacy Linux version.
+Prefer working in `windows/` unless the task explicitly targets the Linux version.
 
 ## Windows Setup
 
@@ -53,7 +53,7 @@ pytest -q
 
 ## Linux Legacy Notes
 
-The original Linux app now lives under `linux/`.
+The Linux app now lives under `linux/`.
 
 Run it from that folder if needed:
 
@@ -63,6 +63,13 @@ python -m s2t
 ```
 
 Its end-to-end test is `linux/tests/test_pipeline.py` and is intentionally excluded from default root test collection unless `S2T_RUN_LINUX_E2E=1`.
+
+Linux runtime behavior is now aligned with the shared options used by the Windows app:
+
+- Supported model variants: `0.6b`, `1.7b`
+- Supported devices: `auto`, `cpu`, `gpu`
+- Config file: `~/.config/s2t/config.toml` or `$XDG_CONFIG_HOME/s2t/config.toml`
+- Optional overrides: `S2T_CONFIG_PATH`, `S2T_LANGUAGE`, `S2T_DEVICE`, `QWEN3_ASR_MODEL`
 
 ## Windows Architecture
 
