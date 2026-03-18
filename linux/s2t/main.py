@@ -1,23 +1,11 @@
-"""
-s2t - Speech-to-Text app for Ubuntu using Qwen3-ASR-1.7B.
+"""Linux speech-to-text app for Ubuntu using Qwen3-ASR."""
 
-Hotkey: double-click Ctrl.
-
-Modes (default: continuous):
-  continuous (default): 1st double-click opens mic; each subsequent double-click
-                        transcribes accumulated audio and keeps mic open.
-  manual (--manual):    1st double-click starts recording, 2nd stops + transcribes.
-
-Usage:
-    python -m s2t                         # continuous mode
-    python -m s2t --manual                # manual start/stop mode
-    S2T_LANGUAGE=Chinese python -m s2t
-    QWEN3_ASR_MODEL=/path/to/model python -m s2t
-"""
-
+import argparse
+from dataclasses import replace
 import fcntl
 import logging
 import os
+from pathlib import Path
 import queue
 import subprocess
 import sys
@@ -43,11 +31,12 @@ log = logging.getLogger("s2t")
 from pynput import keyboard as kb
 
 from . import audio, transcription
+from .config import ConfigError, infer_model_variant, load_config
 from .paste import paste_text
 
-LANGUAGE = os.environ.get("S2T_LANGUAGE", "Chinese")
-MANUAL_MODE = "--manual" in sys.argv
 DEBUG_MODE = "--debug" in sys.argv
+LANGUAGE = "Chinese"
+MANUAL_MODE = False
 
 _CTRL_NAMES = frozenset({"ctrl", "ctrl_l", "ctrl_r"})
 _DOUBLE_TAP_WINDOW = 0.5
@@ -270,16 +259,108 @@ def _acquire_lock():
         return False
 
 
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Linux speech-to-text app")
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
+        "--manual",
+        action="store_true",
+        help="Use manual start/stop recording instead of continuous mode",
+    )
+    mode_group.add_argument(
+        "--continuous",
+        action="store_true",
+        help="Force continuous recording mode",
+    )
+    parser.add_argument(
+        "--model",
+        choices=["0.6b", "1.7b"],
+        help="Temporarily choose the ASR model variant for this run",
+    )
+    parser.add_argument(
+        "--device",
+        choices=["auto", "cpu", "gpu"],
+        help="Temporarily choose whether the ASR model runs on auto/cpu/gpu",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable log file output and save WAV recordings",
+    )
+    return parser
+
+
+def _runtime_config(args: argparse.Namespace):
+    config_override = os.environ.get("S2T_CONFIG_PATH", "").strip()
+    config_path = Path(config_override) if config_override else None
+    config = load_config(config_path)
+
+    if "S2T_LANGUAGE" in os.environ:
+        config = replace(config, language=os.environ["S2T_LANGUAGE"].strip())
+
+    model_id_override = os.environ.get("QWEN3_ASR_MODEL", "").strip()
+    if model_id_override:
+        config = replace(
+            config,
+            model=replace(
+                config.model,
+                variant=infer_model_variant(model_id_override),
+                path_or_id=model_id_override,
+            ),
+        )
+
+    device_override = os.environ.get("S2T_DEVICE", "").strip().lower()
+    if device_override:
+        if device_override not in {"auto", "cpu", "gpu"}:
+            raise ConfigError("S2T_DEVICE must be 'auto', 'cpu', or 'gpu'")
+        config = replace(config, model=replace(config.model, device=device_override))
+
+    if args.manual:
+        config = replace(config, recording=replace(config.recording, mode="manual"))
+    elif args.continuous:
+        config = replace(config, recording=replace(config.recording, mode="continuous"))
+
+    if args.model:
+        model_id = {
+            "0.6b": "Qwen/Qwen3-ASR-0.6B",
+            "1.7b": "Qwen/Qwen3-ASR-1.7B",
+        }[args.model]
+        config = replace(
+            config,
+            model=replace(config.model, variant=args.model, path_or_id=model_id),
+        )
+
+    if args.device:
+        config = replace(config, model=replace(config.model, device=args.device))
+
+    return config
+
+
 def main():
+    global LANGUAGE, MANUAL_MODE
+
+    parser = build_arg_parser()
+    args = parser.parse_args()
+
     if not _acquire_lock():
         print("s2t is already running.")
         sys.exit(1)
 
-    mode_str = "manual" if MANUAL_MODE else "continuous"
+    try:
+        config = _runtime_config(args)
+    except ConfigError as exc:
+        print(f"s2t config error: {exc}", file=sys.stderr)
+        sys.exit(2)
+
+    LANGUAGE = config.language
+    MANUAL_MODE = config.recording.mode == "manual"
+    mode_str = config.recording.mode
     print(
         f"[s2t] Starting. Mode: {mode_str} | Hotkey: double-click Ctrl | Language: {LANGUAGE or 'auto'}"
     )
-    print(f"[s2t] Model: {os.environ.get('QWEN3_ASR_MODEL', 'Qwen/Qwen3-ASR-1.7B')}")
+    print(
+        f"[s2t] Model: {config.model.path_or_id} | Variant: {config.model.variant or 'custom'} | Device: {config.model.device}"
+    )
 
     err = audio.check_mic_permission()
     if err:
@@ -290,7 +371,7 @@ def main():
     else:
         log.info("Mic check OK.")
 
-    transcription.load_model()
+    transcription.load_model(config.model)
 
     threading.Thread(target=_processing_loop, daemon=True).start()
 

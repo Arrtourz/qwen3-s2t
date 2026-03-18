@@ -1,6 +1,6 @@
 # s2t for Linux
 
-This folder preserves the original Ubuntu-oriented implementation from the repository before the Windows tray app refactor.
+This folder preserves the original Ubuntu-oriented implementation, but its runtime configuration is now aligned with the current Windows project for the shared core options.
 
 It targets:
 
@@ -8,79 +8,89 @@ It targets:
 - PulseAudio / PipeWire
 - X11 / Wayland helpers such as `xclip`, `xdotool`, `wtype`
 
-The code here is kept as a historical Linux version and is not the active development target for the current project.
+## Features
 
-## Original README
+- Double-click `Ctrl` to trigger speech capture
+- Hold `Ctrl` for about 2 seconds to exit
+- `continuous` and `manual` recording modes
+- Qwen3-ASR model selection: `0.6b` or `1.7b`
+- Runtime device selection: `auto`, `cpu`, or `gpu`
+- Smart paste for terminals and GUI apps
+- PulseAudio direct microphone capture
 
-# s2t — Ubuntu 语音输入工具
-
-类 Win+H / MySuperWhisper，基于 Qwen3-ASR-1.7B，全局热键触发，转写后自动粘贴。
-
-## 功能
-
-- **持续模式**（默认）：第一次双击 Ctrl 开启麦克风持续监听，此后每次双击截取并转写上一段语音
-- **手动模式**（`--manual`）：双击 Ctrl 开始录音，再次双击停止并转写
-- 长按 Ctrl 2 秒：退出程序
-- 智能粘贴：自动检测终端（Ctrl+Shift+V）vs 普通窗口（Ctrl+V），多行文本逐行粘贴防误提交
-- 音频 beep 反馈：低音=开始，高音=成功，低沉=无语音
-- 支持中英文及多语言（默认 Chinese）
-- CUDA 自动加速，无 GPU 时 fallback 到 CPU
-- 录音通过 PulseAudio 直接采集，自动选取真实麦克风源
-
-## 环境要求
-
-- Ubuntu，PulseAudio / PipeWire
-- conda env `s2t`（Python 3.11）
-- X11（xprop、xclip 用于智能粘贴）
-
-## 安装
+## Install
 
 ```bash
+cd linux
 conda create -n s2t python=3.11
 conda activate s2t
 pip install -r requirements.txt
 conda install -c conda-forge xclip
 ```
 
-## 启动
+## Run
 
 ```bash
-conda activate s2t
-cd /path/to/asrapp
-
-python -m s2t                  # 持续模式
-python -m s2t --manual         # 手动开始/停止模式
-python -m s2t --debug          # 输出日志文件 + 保存录音 WAV
-python -m s2t --manual --debug # 组合使用
+cd linux
+python -m s2t
+python -m s2t --manual
+python -m s2t --continuous
+python -m s2t --model 1.7b
+python -m s2t --device gpu
+python -m s2t --model 0.6b --device cpu
+python -m s2t --debug
 ```
 
-环境变量：
+## Config
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `S2T_LANGUAGE` | `Chinese` | 识别语言，设为空则自动检测 |
-| `QWEN3_ASR_MODEL` | `Qwen/Qwen3-ASR-1.7B` | 模型路径或 HF ID |
-| `PULSE_SERVER` | 系统默认 | PulseAudio socket 路径 |
-
-## 热键
-
-| 操作 | 效果 |
-|------|------|
-| 双击 Ctrl | 持续模式：开启监听 / 转写上一段；手动模式：开始 / 停止转写 |
-| 长按 Ctrl 2 秒 | 退出 |
-
-## 测试
+On first launch the Linux app creates:
 
 ```bash
-export HF_TOKEN=你的token
-conda activate s2t
+~/.config/s2t/config.toml
+```
+
+If `XDG_CONFIG_HOME` is set, the config file is created under `$XDG_CONFIG_HOME/s2t/config.toml` instead.
+
+Default config:
+
+```toml
+hotkey = "double_ctrl"
+language = "Chinese"
+
+[model]
+provider = "qwen3_asr"
+variant = "0.6b"
+path_or_id = "Qwen/Qwen3-ASR-0.6B"
+device = "auto"
+
+[recording]
+mode = "continuous"
+sample_rate = 16000
+channels = 1
+continuous_window_seconds = 60
+```
+
+Supported overrides:
+
+- CLI: `--manual`, `--continuous`, `--model`, `--device`
+- Env: `S2T_CONFIG_PATH`, `S2T_LANGUAGE`, `S2T_DEVICE`, `QWEN3_ASR_MODEL`
+
+`QWEN3_ASR_MODEL` still works for custom local paths or custom Hugging Face IDs. When it matches one of the built-in Qwen3-ASR models, the variant is inferred automatically.
+
+## Tests
+
+Linux end-to-end validation remains in:
+
+```bash
+cd linux
+export HF_TOKEN=<your_token>
 python tests/test_pipeline.py
 ```
 
-英文 WER 11.9%（LibriSpeech），中文 CER 14.8%（FLEURS cmn_hans_cn），均 PASS。
+That pipeline test is intentionally excluded from default root test collection unless `S2T_RUN_LINUX_E2E=1`.
 
-## 调试
+## Notes
 
-`--debug` 模式下输出：
-- 日志：`tmp/s2t.log`
-- 录音 WAV：`tmp/recordings/`
+- The Linux folder is preserved for compatibility and reference.
+- Active product work is still centered on the Windows app under `windows/`.
+- Debug output goes to `linux/tmp/s2t.log` and `linux/tmp/recordings/` when `--debug` is enabled.

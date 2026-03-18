@@ -7,6 +7,7 @@
 # 已定决策
 
 - 原始 Linux 版本代码与测试归档到 `linux/` 子目录
+- Linux 版本已补齐与 Windows 对齐的模型/设备配置入口，支持 `0.6b / 1.7b` 和 `auto / cpu / gpu`
 - 当前 Windows 重构实现整理到 `windows/` 子目录
 - 当前阶段不继续开发 Linux 版本，目标平台是 `Windows 11`
 - 以当前工作区为重构载体，但架构按“新项目”标准重建
