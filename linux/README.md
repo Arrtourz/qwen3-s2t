@@ -59,7 +59,7 @@ language = "Chinese"
 
 [model]
 provider = "qwen3_asr"
-variant = "0.6b"
+variant = "0.6b" 
 path_or_id = "Qwen/Qwen3-ASR-0.6B"
 device = "auto"
 

@@ -29,9 +29,10 @@ def test_cli_parser_supports_manual_and_continuous() -> None:
     assert continuous_args.manual is False
     assert continuous_args.continuous is True
 
-    model_args = parser.parse_args(["--model", "1.7b", "--device", "gpu"])
+    model_args = parser.parse_args(["--model", "1.7b", "--device", "gpu", "--backend", "python"])
     assert model_args.model == "1.7b"
     assert model_args.device == "gpu"
+    assert model_args.backend == "python"
 
 
 def test_cli_parser_rejects_conflicting_mode_flags() -> None:

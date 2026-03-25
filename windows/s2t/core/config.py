@@ -7,8 +7,12 @@ import tomllib
 
 
 APP_DIR_NAME = "s2t"
-DEFAULT_HOTKEY = "double_ctrl"
+DEFAULT_HOTKEY = "ctrl+alt+h"
 DEFAULT_RECORDING_MODE = "continuous"
+MODEL_PROVIDERS = {
+    "qwen3_asr",
+    "qwen_asr_cli",
+}
 MODEL_VARIANTS = {
     "0.6b": "Qwen/Qwen3-ASR-0.6B",
     "1.7b": "Qwen/Qwen3-ASR-1.7B",
@@ -16,7 +20,7 @@ MODEL_VARIANTS = {
 DEFAULT_MODEL_VARIANT = "0.6b"
 DEFAULT_MODEL_ID = "Qwen/Qwen3-ASR-0.6B"
 LEGACY_MODEL_ID = "Qwen/Qwen3-ASR-1.7B"
-LEGACY_DEFAULT_HOTKEY = "ctrl+alt+h"
+PREVIOUS_DEFAULT_HOTKEY = "double_ctrl"
 
 
 class ConfigError(ValueError):
@@ -29,6 +33,7 @@ class ModelConfig:
     variant: str = DEFAULT_MODEL_VARIANT
     path_or_id: str = DEFAULT_MODEL_ID
     device: str = "auto"
+    binary_path: str = ""
 
 
 @dataclass(frozen=True)
@@ -77,6 +82,26 @@ def default_log_file() -> Path:
     return app_data_dir() / "logs" / "s2t.log"
 
 
+def runtime_temp_dir() -> Path:
+    override = os.environ.get("S2T_RUNTIME_TEMP_DIR", "").strip()
+    if override:
+        return Path(override)
+    return app_data_dir() / "tmp"
+
+
+def repo_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def default_lightweight_binary_path() -> Path:
+    suffix = ".exe" if os.name == "nt" else ""
+    return repo_root() / "third_party" / "qwen-asr" / f"qwen_asr{suffix}"
+
+
+def default_lightweight_model_dir(variant: str = DEFAULT_MODEL_VARIANT) -> Path:
+    return repo_root() / "third_party" / "qwen-asr" / f"qwen3-asr-{variant.strip().lower()}"
+
+
 def _default_config_text() -> str:
     return f"""hotkey = "{DEFAULT_HOTKEY}"
 language = "Chinese"
@@ -86,6 +111,7 @@ provider = "qwen3_asr"
 variant = "{DEFAULT_MODEL_VARIANT}"
 path_or_id = "{DEFAULT_MODEL_ID}"
 device = "auto"
+binary_path = ""
 
 [recording]
 mode = "{DEFAULT_RECORDING_MODE}"
@@ -136,33 +162,30 @@ def ensure_config(path: Path | None = None) -> Path:
         config_path.write_text(_default_config_text(), encoding="utf-8")
     else:
         current_text = config_path.read_text(encoding="utf-8-sig")
+        previous_default_text = _default_config_text().replace(DEFAULT_HOTKEY, PREVIOUS_DEFAULT_HOTKEY, 1)
         migratable_texts = {
-            _default_config_text(),
-            _default_config_text().replace(DEFAULT_HOTKEY, LEGACY_DEFAULT_HOTKEY, 1),
-            _default_config_text().replace(DEFAULT_RECORDING_MODE, "manual", 1),
-            _default_config_text()
-            .replace(DEFAULT_RECORDING_MODE, "manual", 1)
-            .replace(DEFAULT_HOTKEY, LEGACY_DEFAULT_HOTKEY, 1),
-            _default_config_text().replace(DEFAULT_MODEL_ID, LEGACY_MODEL_ID, 1).replace(
-                DEFAULT_MODEL_VARIANT, "1.7b", 1
-            ),
-            _default_config_text()
+            previous_default_text,
+            _without_binary_path_line(previous_default_text),
+            previous_default_text
+            .replace(DEFAULT_RECORDING_MODE, "manual", 1),
+            _without_binary_path_line(previous_default_text.replace(DEFAULT_RECORDING_MODE, "manual", 1)),
+            previous_default_text
             .replace(DEFAULT_MODEL_ID, LEGACY_MODEL_ID, 1)
-            .replace(DEFAULT_MODEL_VARIANT, "1.7b", 1)
-            .replace(DEFAULT_HOTKEY, LEGACY_DEFAULT_HOTKEY, 1),
-            _default_config_text()
+            .replace(DEFAULT_MODEL_VARIANT, "1.7b", 1),
+            _without_binary_path_line(
+                previous_default_text
+                .replace(DEFAULT_MODEL_ID, LEGACY_MODEL_ID, 1)
+                .replace(DEFAULT_MODEL_VARIANT, "1.7b", 1)
+            ),
+            previous_default_text
             .replace(DEFAULT_MODEL_ID, LEGACY_MODEL_ID, 1)
             .replace(DEFAULT_MODEL_VARIANT, "1.7b", 1)
             .replace(DEFAULT_RECORDING_MODE, "manual", 1),
-            _default_config_text()
-            .replace(DEFAULT_MODEL_ID, LEGACY_MODEL_ID, 1)
-            .replace(DEFAULT_MODEL_VARIANT, "1.7b", 1)
-            .replace(DEFAULT_RECORDING_MODE, "manual", 1)
-            .replace(DEFAULT_HOTKEY, LEGACY_DEFAULT_HOTKEY, 1),
-            _legacy_default_config_text(
-                hotkey=LEGACY_DEFAULT_HOTKEY,
-                mode="manual",
-                model_id=LEGACY_MODEL_ID,
+            _without_binary_path_line(
+                previous_default_text
+                .replace(DEFAULT_MODEL_ID, LEGACY_MODEL_ID, 1)
+                .replace(DEFAULT_MODEL_VARIANT, "1.7b", 1)
+                .replace(DEFAULT_RECORDING_MODE, "manual", 1)
             ),
             _legacy_default_config_text(
                 hotkey=DEFAULT_HOTKEY,
@@ -170,12 +193,17 @@ def ensure_config(path: Path | None = None) -> Path:
                 model_id=LEGACY_MODEL_ID,
             ),
             _legacy_default_config_text(
-                hotkey=LEGACY_DEFAULT_HOTKEY,
+                hotkey=PREVIOUS_DEFAULT_HOTKEY,
+                mode="manual",
+                model_id=LEGACY_MODEL_ID,
+            ),
+            _legacy_default_config_text(
+                hotkey=DEFAULT_HOTKEY,
                 mode=DEFAULT_RECORDING_MODE,
                 model_id=LEGACY_MODEL_ID,
             ),
             _legacy_default_config_text(
-                hotkey=DEFAULT_HOTKEY,
+                hotkey=PREVIOUS_DEFAULT_HOTKEY,
                 mode=DEFAULT_RECORDING_MODE,
                 model_id=LEGACY_MODEL_ID,
             ),
@@ -203,6 +231,7 @@ def save_config(config: AppConfig, path: Path | None = None) -> Path:
                 "variant": config.model.variant,
                 "path_or_id": config.model.path_or_id,
                 "device": config.model.device,
+                "binary_path": config.model.binary_path,
             },
             "recording": {
                 "mode": config.recording.mode,
@@ -241,10 +270,9 @@ def _parse_config(raw: dict) -> AppConfig:
         variant=str(model_raw.get("variant", "")).strip().lower(),
         path_or_id=str(model_raw.get("path_or_id", DEFAULT_MODEL_ID)).strip(),
         device=str(model_raw.get("device", "auto")).strip().lower(),
+        binary_path=str(model_raw.get("binary_path", "")).strip(),
     )
-    if model.provider != "qwen3_asr":
-        raise ConfigError("model.provider must be 'qwen3_asr'")
-    model = _normalize_model_config(model)
+    model = normalize_model_config(model)
 
     recording = RecordingConfig(
         mode=str(recording_raw.get("mode", DEFAULT_RECORDING_MODE)).strip().lower(),
@@ -295,53 +323,81 @@ def resolve_model_variant(variant: str) -> str:
     return MODEL_VARIANTS[normalized]
 
 
-def _normalize_model_config(model: ModelConfig) -> ModelConfig:
+def normalize_model_config(model: ModelConfig) -> ModelConfig:
+    if model.provider not in MODEL_PROVIDERS:
+        raise ConfigError("model.provider must be 'qwen3_asr' or 'qwen_asr_cli'")
+
     variant = model.variant.strip().lower()
     path_or_id = model.path_or_id.strip()
-    if variant:
-        resolved = resolve_model_variant(variant)
-        if path_or_id and path_or_id != resolved:
-            raise ConfigError("model.path_or_id does not match model.variant")
-        path_or_id = resolved
-    else:
-        reverse_map = {value: key for key, value in MODEL_VARIANTS.items()}
-        variant = reverse_map.get(path_or_id, "")
+    binary_path = model.binary_path.strip()
 
-    if not path_or_id:
-        raise ConfigError("model.path_or_id must be a non-empty string")
-    if model.device not in {"auto", "cpu", "gpu"}:
-        raise ConfigError("model.device must be 'auto', 'cpu', or 'gpu'")
+    if model.provider == "qwen3_asr":
+        if variant:
+            resolved = resolve_model_variant(variant)
+            if path_or_id and path_or_id != resolved:
+                raise ConfigError("model.path_or_id does not match model.variant")
+            path_or_id = resolved
+        else:
+            reverse_map = {value: key for key, value in MODEL_VARIANTS.items()}
+            variant = reverse_map.get(path_or_id, "")
+
+        if not path_or_id:
+            raise ConfigError("model.path_or_id must be a non-empty string")
+        if model.device not in {"auto", "cpu", "gpu"}:
+            raise ConfigError("model.device must be 'auto', 'cpu', or 'gpu'")
+    else:
+        if variant:
+            resolve_model_variant(variant)
+        else:
+            variant = DEFAULT_MODEL_VARIANT
+        if not path_or_id:
+            path_or_id = str(default_lightweight_model_dir(variant))
+        if not binary_path:
+            binary_path = str(default_lightweight_binary_path())
+        if model.device not in {"auto", "cpu"}:
+            raise ConfigError("lightweight backend only supports model.device 'auto' or 'cpu'")
 
     return ModelConfig(
         provider=model.provider,
         variant=variant,
         path_or_id=path_or_id,
         device=model.device,
+        binary_path=binary_path,
     )
 
 
 def _config_to_toml(config: AppConfig) -> str:
-    return f"""hotkey = "{config.hotkey}"
-language = "{config.language}"
+    return f"""hotkey = {_toml_string(config.hotkey)}
+language = {_toml_string(config.language)}
 
 [model]
-provider = "{config.model.provider}"
-variant = "{config.model.variant}"
-path_or_id = "{config.model.path_or_id}"
-device = "{config.model.device}"
+provider = {_toml_string(config.model.provider)}
+variant = {_toml_string(config.model.variant)}
+path_or_id = {_toml_string(config.model.path_or_id)}
+device = {_toml_string(config.model.device)}
+binary_path = {_toml_string(config.model.binary_path)}
 
 [recording]
-mode = "{config.recording.mode}"
+mode = {_toml_string(config.recording.mode)}
 sample_rate = {config.recording.sample_rate}
 channels = {config.recording.channels}
 continuous_window_seconds = {config.recording.continuous_window_seconds}
 block_duration_ms = {config.recording.block_duration_ms}
 
 [paste]
-multiline_strategy = "{config.paste.multiline_strategy}"
+multiline_strategy = {_toml_string(config.paste.multiline_strategy)}
 settle_delay_ms = {config.paste.settle_delay_ms}
 line_delay_ms = {config.paste.line_delay_ms}
 
 [logging]
-level = "{config.logging.level}"
+level = {_toml_string(config.logging.level)}
 """
+
+
+def _toml_string(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _without_binary_path_line(text: str) -> str:
+    return text.replace('binary_path = ""\n', "")

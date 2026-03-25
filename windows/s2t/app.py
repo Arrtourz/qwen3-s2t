@@ -29,6 +29,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Temporarily choose the ASR model variant for this run",
     )
     parser.add_argument(
+        "--backend",
+        choices=["python", "lightweight"],
+        help="Temporarily choose the ASR backend",
+    )
+    parser.add_argument(
         "--device",
         choices=["auto", "cpu", "gpu"],
         help="Temporarily choose whether the ASR model runs on auto/cpu/gpu",
@@ -40,6 +45,10 @@ def main(argv: list[str] | None = None) -> None:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
     mode_override = "manual" if args.manual else "continuous" if args.continuous else None
+    provider_override = {
+        "python": "qwen3_asr",
+        "lightweight": "qwen_asr_cli",
+    }.get(args.backend)
 
     config_override = os.environ.get("S2T_CONFIG_PATH", "").strip()
     config_path = Path(config_override) if config_override else None
@@ -50,6 +59,7 @@ def main(argv: list[str] | None = None) -> None:
     controller = SpeechToTextController(
         config_path=config_path,
         recording_mode_override=mode_override,
+        provider_override=provider_override,
         model_variant_override=args.model,
         device_override=args.device,
     )

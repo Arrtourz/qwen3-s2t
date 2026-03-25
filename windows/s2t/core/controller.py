@@ -18,7 +18,14 @@ from ..platform.windows.paste import WindowsPasteService
 from ..platform.windows.settings import SettingsWindow
 from ..platform.windows.tray import WindowsTrayService
 from .backend import ASRBackend, build_backend
-from .config import AppConfig, ConfigError, default_config_path, default_log_file, load_config
+from .config import (
+    AppConfig,
+    ConfigError,
+    default_config_path,
+    default_log_file,
+    load_config,
+    normalize_model_config,
+)
 
 
 log = logging.getLogger(__name__)
@@ -29,6 +36,7 @@ class SpeechToTextController:
         self,
         config_path: Path | None = None,
         recording_mode_override: str | None = None,
+        provider_override: str | None = None,
         model_variant_override: str | None = None,
         device_override: str | None = None,
     ) -> None:
@@ -37,6 +45,7 @@ class SpeechToTextController:
         else:
             self.config_path = config_path
         self.recording_mode_override = recording_mode_override
+        self.provider_override = provider_override
         self.model_variant_override = model_variant_override
         self.device_override = device_override
         self.config: AppConfig | None = None
@@ -53,6 +62,7 @@ class SpeechToTextController:
         self._stop_event = threading.Event()
         self._worker = threading.Thread(target=self._worker_loop, daemon=True)
         self._worker_started = False
+        self._console_ctrl_handler = None
 
     def run(self) -> None:
         self._load_runtime(initial=True)
@@ -72,17 +82,33 @@ class SpeechToTextController:
                 config,
                 recording=replace(config.recording, mode=self.recording_mode_override),
             )
+        if self.provider_override is not None:
+            reset_model_paths = config.model.provider != self.provider_override
+            config = replace(
+                config,
+                model=replace(
+                    config.model,
+                    provider=self.provider_override,
+                    path_or_id="" if reset_model_paths else config.model.path_or_id,
+                    binary_path="" if reset_model_paths else config.model.binary_path,
+                ),
+            )
         if self.model_variant_override is not None:
             variant_map = {
                 "0.6b": "Qwen/Qwen3-ASR-0.6B",
                 "1.7b": "Qwen/Qwen3-ASR-1.7B",
             }
+            path_or_id = (
+                variant_map[self.model_variant_override]
+                if config.model.provider == "qwen3_asr"
+                else ""
+            )
             config = replace(
                 config,
                 model=replace(
                     config.model,
                     variant=self.model_variant_override,
-                    path_or_id=variant_map[self.model_variant_override],
+                    path_or_id=path_or_id,
                 ),
             )
         if self.device_override is not None:
@@ -90,6 +116,10 @@ class SpeechToTextController:
                 config,
                 model=replace(config.model, device=self.device_override),
             )
+        config = replace(
+            config,
+            model=normalize_model_config(config.model),
+        )
         configure_logging(default_log_file(), config.logging.level)
 
         previous = self.config
@@ -109,7 +139,7 @@ class SpeechToTextController:
 
         if self.hotkey is None:
             self.hotkey = KeyboardHotkeyService()
-        self.hotkey.register(config.hotkey, self.handle_hotkey, on_long_press=self.handle_long_press_exit)
+        self.hotkey.register(config.hotkey, self.handle_hotkey)
 
         if self.tray is None:
             self.settings_window = SettingsWindow(
@@ -185,6 +215,8 @@ class SpeechToTextController:
     def snapshot_recording(self) -> None:
         if self.audio is None:
             return
+        self._beep(760, 90)
+        log.info("Recording snapshot requested")
         data = self.audio.snapshot_recording()
         self._queue_audio(data)
 
@@ -254,19 +286,39 @@ class SpeechToTextController:
         if self.tray is not None:
             self.tray.stop()
 
-    def handle_long_press_exit(self) -> None:
-        log.info("Long-press Ctrl detected; exiting")
-        self._beep(440, 250)
-        self.shutdown()
-
     def _install_signal_handlers(self) -> None:
         def _handle_signal(signum, _frame) -> None:
             log.info("Received signal %s", signum)
             self.shutdown()
 
         signal.signal(signal.SIGINT, _handle_signal)
+        if hasattr(signal, "SIGBREAK"):
+            signal.signal(signal.SIGBREAK, _handle_signal)
         if hasattr(signal, "SIGTERM"):
             signal.signal(signal.SIGTERM, _handle_signal)
+        self._install_console_ctrl_handler()
+
+    def _install_console_ctrl_handler(self) -> None:
+        if os.name != "nt":
+            return
+
+        import ctypes
+
+        handler_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_uint)
+        handled_events = {0, 1, 2, 5, 6}
+
+        def _handle_console_ctrl(ctrl_type: int) -> bool:
+            if ctrl_type not in handled_events:
+                return False
+            log.info("Received console control event %s", ctrl_type)
+            self.shutdown()
+            return True
+
+        self._console_ctrl_handler = handler_type(_handle_console_ctrl)
+        try:
+            ctypes.windll.kernel32.SetConsoleCtrlHandler(self._console_ctrl_handler, True)
+        except Exception:
+            log.debug("SetConsoleCtrlHandler is unavailable", exc_info=True)
 
     def _notify(self, title: str, message: str) -> None:
         if self.tray is not None:

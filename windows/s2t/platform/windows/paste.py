@@ -53,7 +53,7 @@ class WindowsPasteService:
             if action == "paste":
                 pyperclip.copy(payload or "")
                 time.sleep(self.config.settle_delay_ms / 1000.0)
-                keyboard.send("ctrl+shift+v" if terminal else "ctrl+v")
+                keyboard.send("ctrl+shift+v")
             elif action == "newline":
                 keyboard.send("shift+enter")
             time.sleep(self.config.line_delay_ms / 1000.0)

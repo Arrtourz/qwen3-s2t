@@ -6,3 +6,16 @@ __pycache__/
 tmp/
 *.wav
 .claude/
+image.png
+tmp_pytest/
+windows/.pytest-local/
+windows/.pytest-tmp/
+windows/test-output/
+windows/runtime-temp/
+windows/windows/
+windows/migrate-hotkey-smoke.toml
+third_party/
+third_party/qwen-asr/qwen3-asr-0.6b/
+third_party/qwen-asr/*.o
+third_party/qwen-asr/*.obj
+third_party/qwen-asr/*.exe

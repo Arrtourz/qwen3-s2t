@@ -29,15 +29,18 @@ python -m s2t
 python -m s2t --manual
 python -m s2t --model 1.7b
 python -m s2t --device gpu
+python -m s2t --backend lightweight --device cpu --model 0.6b
 ```
 
 Important runtime behavior:
 
-- Default hotkey: `double_ctrl`
-- Long-press `Ctrl` for about 2 seconds exits
+- Default hotkey: `ctrl+alt+h`
 - Default mode: `continuous`
 - Supported model variants: `0.6b`, `1.7b`
 - Supported devices: `auto`, `cpu`, `gpu`
+- Supported backends:
+  - `python`
+  - `lightweight`
 - Config file: `%APPDATA%\\s2t\\config.toml`
 
 Optional env override:
@@ -77,3 +80,20 @@ Linux runtime behavior is now aligned with the shared options used by the Window
 - `windows/s2t/platform/windows/` contains hotkey, audio capture, paste, tray, notifications, settings UI, and single-instance lock.
 - `windows/tests/` contains tests for config, hotkey, paste, controller, startup, and saving.
 - `windows/scripts/` contains local utility scripts such as model benchmarking.
+
+## Lightweight Backend Notes
+
+- The lightweight backend targets `third_party/qwen-asr/`.
+- On this machine it was built successfully under `MSYS2 UCRT64`.
+- Current known Windows compatibility edits live inside:
+  - `third_party/qwen-asr/qwen_asr_kernels.c`
+  - `third_party/qwen-asr/qwen_asr_safetensors.c`
+  - `third_party/qwen-asr/qwen_asr_safetensors.h`
+- The app injects `C:\\msys64\\ucrt64\\bin` into `PATH` when launching `qwen_asr.exe` so OpenBLAS runtime DLLs resolve from normal PowerShell launches.
+
+## Hotkey Notes
+
+- `double_ctrl` still uses the keyboard hook path.
+- Standard combinations such as `ctrl+alt+h` now use the native Windows `RegisterHotKey` API for better reliability.
+- Windows paste now always uses `Ctrl+Shift+V`.
+- In `continuous` mode, snapshot requests play a dedicated tone so they are distinguishable from the initial start tone.
