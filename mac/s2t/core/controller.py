@@ -27,6 +27,7 @@ from .config import (
 )
 from .transcript import TranscriptWriter
 from .voice import has_voice, is_filler, voice_metrics
+from .speaker_id import SpeakerVerifier, VoiceProfile
 
 
 log = logging.getLogger(__name__)
@@ -53,6 +54,8 @@ class SpeechToTextController:
         self.hotkey: GlobalHotkeyService | None = None
         self.tray: MacTrayApp | None = None
         self.transcript: TranscriptWriter | None = None
+        self.verifier: SpeakerVerifier | None = None
+        self.profile = VoiceProfile(default_config_path().parent / "voice_profile.json")
 
         self._meeting_lock = threading.Lock()
         self._meeting_active = False
@@ -136,6 +139,7 @@ class SpeechToTextController:
                 on_reload=self.reload_config,
                 on_open_logs=self.open_logs,
                 on_open_transcript_folder=self.open_transcript_folder,
+                on_enroll_voice=self.enroll_voice,
                 on_exit=self.shutdown,
             )
         self.tray.set_loading(True)
@@ -167,6 +171,10 @@ class SpeechToTextController:
             if self.transcript is not None:
                 self.transcript.close_session()
             self.transcript = TranscriptWriter(config.transcript)
+
+        # Load the speaker-verification model only when the filter is enabled.
+        if config.meeting.speaker_filter and self.verifier is None:
+            self.verifier = SpeakerVerifier()
 
         if not self._worker_started:
             self._worker.start()
@@ -290,6 +298,29 @@ class SpeechToTextController:
                 dur, speaker, ratio * 100, rms, zcr, min_ratio * 100, frame_rms,
             )
             return
+        # Speaker filter: only the mic ("Me") stream, and only if enabled +
+        # enrolled. Keeps the segment only if it matches the enrolled voiceprint.
+        if (
+            m is not None
+            and m.speaker_filter
+            and speaker == m.mic_label
+            and self.profile.enrolled
+            and self.verifier is not None
+        ):
+            try:
+                emb = self.verifier.embed(audio)
+                ref = self.profile.load()
+                sim = self.verifier.cosine(emb, ref)
+                if sim < m.speaker_threshold:
+                    log.info(
+                        "Dropped non-owner %.2fs from %s (speaker sim=%.3f < %.2f)",
+                        dur, speaker, sim, m.speaker_threshold,
+                    )
+                    return
+                log.info("Speaker match %.2fs from %s (sim=%.3f)", dur, speaker, sim)
+            except Exception:
+                log.exception("Speaker verification failed; keeping segment")
+
         log.info(
             "Queued %.2fs from %s (voiced=%.0f%% RMS=%.5f ZCR=%.3f)",
             dur, speaker, ratio * 100, rms, zcr,
@@ -337,6 +368,58 @@ class SpeechToTextController:
         if self.config is not None and self.config.transcript.output_dir:
             return Path(self.config.transcript.output_dir)
         return default_transcript_dir()
+
+    def enroll_voice(self) -> None:
+        """Record ~10s from the mic and save it as the owner's voiceprint.
+
+        Runs the recording + embedding on a background thread so the menu-bar UI
+        stays responsive. Enables speaker_filter in config on success.
+        """
+        if self._meeting_active:
+            self._notify("s2t", "End the current meeting before enrolling your voice")
+            return
+        threading.Thread(target=self._enroll_worker, daemon=True).start()
+
+    def _enroll_worker(self) -> None:
+        import sounddevice as sd
+        from ..platform.macos.meeting_audio import resolve_mic_device
+
+        try:
+            self._notify("Enroll voice", "Recording 10s — speak normally now.")
+            beep("start")
+            device = resolve_mic_device(self.config.meeting.mic_device if self.config else "")
+            audio = sd.rec(int(16000 * 10), samplerate=16000, channels=1, dtype="float32", device=device)
+            sd.wait()
+            audio = audio.reshape(-1)
+
+            peak = float(np.max(np.abs(audio))) if audio.size else 0.0
+            if peak < 0.05:
+                beep("error")
+                self._notify("Enroll failed", "Too quiet — speak louder and try again.")
+                return
+
+            if self.verifier is None:
+                self.verifier = SpeakerVerifier()
+            emb = self.verifier.embed(audio)
+            self.profile.save(emb)
+
+            # Turn the filter on now that a profile exists, and persist it.
+            if self.config is not None and not self.config.meeting.speaker_filter:
+                from .config import save_config
+
+                self.config = replace(
+                    self.config,
+                    meeting=replace(self.config.meeting, speaker_filter=True),
+                )
+                save_config(self.config, self.config_path)
+
+            beep("done")
+            self._notify("Voice enrolled", "Speaker filter is now ON.")
+            log.info("Voice profile enrolled and speaker filter enabled")
+        except Exception as exc:
+            log.exception("Voice enrollment failed")
+            beep("error")
+            self._notify("Enroll failed", str(exc))
 
     def open_settings(self) -> None:
         """Open the config file for editing.

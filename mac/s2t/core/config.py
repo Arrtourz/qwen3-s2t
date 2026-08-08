@@ -89,6 +89,14 @@ class MeetingConfig:
     voice_frame_rms: float = 0.045
     voice_max_zcr: float = 0.32
     voice_min_voiced_ratio: float = 0.30
+    # Speaker verification (WavLM voiceprint). When enabled AND a voice profile
+    # has been enrolled, the mic ("Me") stream keeps a segment only if its
+    # speaker embedding matches the enrolled profile with cosine similarity >=
+    # speaker_threshold. This filters out colleagues/others captured by the mic.
+    # Only applies to the mic stream — the system-tap ("Them") stream is never
+    # speaker-filtered. Disabled by default (needs enrollment first).
+    speaker_filter: bool = False
+    speaker_threshold: float = 0.55
 
 
 @dataclass(frozen=True)
@@ -205,6 +213,8 @@ max_segment_seconds = 20.0
 voice_frame_rms = 0.045
 voice_max_zcr = 0.32
 voice_min_voiced_ratio = 0.30
+speaker_filter = false
+speaker_threshold = 0.55
 
 [logging]
 level = "INFO"
@@ -291,6 +301,8 @@ def _parse_config(raw: dict) -> AppConfig:
         voice_frame_rms=float(meeting_raw.get("voice_frame_rms", 0.045)),
         voice_max_zcr=float(meeting_raw.get("voice_max_zcr", 0.32)),
         voice_min_voiced_ratio=float(meeting_raw.get("voice_min_voiced_ratio", 0.30)),
+        speaker_filter=bool(meeting_raw.get("speaker_filter", False)),
+        speaker_threshold=float(meeting_raw.get("speaker_threshold", 0.55)),
     )
     if meeting.system_source not in {"tap", "device", "off"}:
         raise ConfigError("meeting.system_source must be 'tap', 'device', or 'off'")
@@ -412,6 +424,8 @@ max_segment_seconds = {config.meeting.max_segment_seconds}
 voice_frame_rms = {config.meeting.voice_frame_rms}
 voice_max_zcr = {config.meeting.voice_max_zcr}
 voice_min_voiced_ratio = {config.meeting.voice_min_voiced_ratio}
+speaker_filter = {"true" if config.meeting.speaker_filter else "false"}
+speaker_threshold = {config.meeting.speaker_threshold}
 
 [logging]
 level = {_s(config.logging.level)}
