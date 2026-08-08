@@ -4,11 +4,12 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 ## Repository Layout
 
-- `windows/` contains the active Windows 11 tray app.
-- `linux/` contains the Ubuntu / PulseAudio implementation with aligned model and device runtime options.
+- `mac/` contains the macOS menu-bar app with meeting-transcript support (Apple Silicon primary target).
+- `windows/` contains the Windows 11 tray app.
+- `linux/` contains the Ubuntu / PulseAudio implementation.
 - Repository root only coordinates the subprojects and shared documentation.
 
-Prefer working in `windows/` unless the task explicitly targets the Linux version.
+Prefer working in `mac/` unless the task explicitly targets Windows or Linux.
 
 ## Windows Setup
 

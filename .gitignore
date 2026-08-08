@@ -6,7 +6,15 @@ __pycache__/
 tmp/
 *.wav
 .claude/
+.DS_Store
 image.png
+
+# mac build/runtime artifacts
+mac/.venv/
+mac/build/
+mac/dist/
+mac/test-output/
+mac/runtime-temp/
 tmp_pytest/
 windows/.pytest-local/
 windows/.pytest-tmp/

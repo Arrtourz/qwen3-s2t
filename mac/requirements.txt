@@ -1,0 +1,13 @@
+numpy>=1.24.0
+tomli>=2.0.0; python_version < "3.11"
+Pillow>=10.0.0
+pynput>=1.7.7
+pyperclip>=1.9.0
+qwen-asr>=0.0.6
+rumps>=0.4.0
+sounddevice>=0.4.7
+torch>=2.3.0
+transformers>=4.50.0
+
+# Testing only
+pytest>=8.0.0
