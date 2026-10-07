@@ -13,7 +13,6 @@ import numpy as np
 from ..logging_utils import configure_logging
 from ..platform.macos.hotkey import GlobalHotkeyService
 from ..platform.macos.meeting_audio import MeetingRecorder
-from ..platform.macos.sound import beep
 from ..platform.macos.tray import MacTrayApp
 from .backend import ASRBackend, build_backend
 from .config import (
@@ -296,8 +295,8 @@ class SpeechToTextController:
             self._meeting_active = True
             if self.tray is not None:
                 self.tray.set_recording(True)
-            # Start silently, no tone and no banner; the icon turning 🔴 is the
-            # signal. (The tone also played into the system tap.)
+            # The app makes no sound at all (user preference); the menu-bar
+            # icon turning 🔴 is the signal. Start shows no banner either.
             log.info("Meeting started with streams: %s", labels)
 
     def end_meeting(self) -> None:
@@ -308,7 +307,6 @@ class SpeechToTextController:
             self._meeting_active = False
             if self.tray is not None:
                 self.tray.set_recording(False)
-            beep("done")
             log.info("Meeting ended")
             # recorder.stop() just flushed each stream's last utterance into the
             # queue. Closing the transcript here dropped those: the worker wrote

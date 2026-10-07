@@ -108,8 +108,6 @@ def _shutdown(c):
 
 
 def test_final_utterance_reaches_the_transcript(monkeypatch):
-    import s2t.core.controller as ctl
-    monkeypatch.setattr(ctl, "beep", lambda *_: None)
     c = _controller(FakeBackend(delay=0.2))  # slow enough that the old code lost it
     c.start_meeting()
     c.end_meeting()
@@ -121,8 +119,6 @@ def test_final_utterance_reaches_the_transcript(monkeypatch):
 
 
 def test_idle_unload_fires_after_timeout(monkeypatch):
-    import s2t.core.controller as ctl
-    monkeypatch.setattr(ctl, "beep", lambda *_: None)
     backend = FakeBackend()
     c = _controller(backend, idle_minutes=0.5 / 60)  # 0.5 s
     c.start_meeting()
@@ -134,8 +130,6 @@ def test_idle_unload_fires_after_timeout(monkeypatch):
 
 
 def test_start_meeting_cancels_pending_unload_and_reloads(monkeypatch):
-    import s2t.core.controller as ctl
-    monkeypatch.setattr(ctl, "beep", lambda *_: None)
     backend = FakeBackend()
     c = _controller(backend, idle_minutes=0.5 / 60)
     c.start_meeting(); c.end_meeting(); c._finisher.join(timeout=5)
@@ -150,8 +144,6 @@ def test_start_meeting_cancels_pending_unload_and_reloads(monkeypatch):
 
 
 def test_zero_minutes_never_unloads(monkeypatch):
-    import s2t.core.controller as ctl
-    monkeypatch.setattr(ctl, "beep", lambda *_: None)
     backend = FakeBackend()
     c = _controller(backend, idle_minutes=0)
     c.start_meeting(); c.end_meeting(); c._finisher.join(timeout=5)
@@ -171,15 +163,20 @@ def test_evicted_segments_do_not_block_join():
     assert done.wait(2), "queue.join() hung: evicted items were never marked done"
 
 
-def test_start_meeting_is_silent(monkeypatch):
-    import s2t.core.controller as ctl
-    beeps, notes = [], []
-    monkeypatch.setattr(ctl, "beep", beeps.append)
+def test_meeting_makes_no_sound(monkeypatch):
+    # No tone on start or end (user preference). Intercept the only audio-out
+    # path, so any future beep is caught, not just one named beep().
+    import sounddevice
+    played = []
+    monkeypatch.setattr(sounddevice, "play", lambda *a, **k: played.append(a))
     c = _controller(FakeBackend())
+    notes = []
     c._notify = lambda *a: notes.append(a)
     c.start_meeting()
-    assert beeps == [] and notes == []
+    assert notes == []  # start: no banner either
     c.end_meeting(); c._finisher.join(timeout=5)
+    time.sleep(0.3)
+    assert played == []
     _shutdown(c)
 
 

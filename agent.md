@@ -506,4 +506,6 @@ worker 转写完再 `append()` 时文件已关，直接丢弃。用户日志里�
 - 直接提交在 `main`；`mac-long-run-memory` 分支指向同一个 commit，保留未删；未 push。
 - **静默启动**（用户要求）：去掉 Start Meeting 的提示音和 app 启动时的 "Ready" 通知，
   也去掉开会时的 Voice Isolation 提示；状态以菜单栏图标为准（⏳ → 🎙 → 🔴）。
-  保留：启动失败 / 音频设备错误的通知，以及 End Meeting 的提示音。
+  保留：启动失败 / 音频设备错误的通知。
+- **完全无声**（用户要求）：End Meeting 的提示音也去掉了，`sound.py` 已删除，app 不再播放任何声音。
+  测试直接拦截 `sounddevice.play`，以后不管谁再加提示音都会被发现。
