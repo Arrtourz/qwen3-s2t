@@ -111,4 +111,3 @@ def test_dropped_fields_are_ignored_in_old_configs():
     raw["meeting"] = {"silence_rms": 0.008}
     cfg = _parse_config(raw)
     assert not hasattr(cfg.recording, "channels") and not hasattr(cfg.meeting, "silence_rms")
-    assert cfg.meeting.drop_mic_echo is True

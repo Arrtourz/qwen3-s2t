@@ -9,7 +9,6 @@ import numpy as np
 
 from s2t.core.config import MeetingConfig, MemoryConfig
 from s2t.core.controller import SpeechToTextController
-from s2t.core.echo import EchoFilter
 
 
 class FakeBackend:
@@ -97,7 +96,6 @@ def _controller(backend, idle_minutes=10.0):
     c._toggle_requested = threading.Event()
     c._idle_timer = None
     c._finisher = None
-    c._echo = EchoFilter()
     # VAD is out of scope here: queue every segment.
     c._on_segment = lambda speaker, audio: c._enqueue(speaker, audio)
     c._notify = lambda *a: None

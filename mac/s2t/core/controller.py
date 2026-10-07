@@ -24,7 +24,6 @@ from .config import (
     load_config,
     normalize_model_config,
 )
-from .echo import EchoFilter
 from .memory_debug import MemoryMonitor, enabled_from_env
 from .transcript import TranscriptWriter
 from .voice import is_filler, voice_metrics
@@ -72,7 +71,6 @@ class SpeechToTextController:
         self._toggle_requested = threading.Event()
         self._idle_timer: threading.Timer | None = None
         self._finisher: threading.Thread | None = None
-        self._echo = EchoFilter()
         self._worker = threading.Thread(target=self._worker_loop, daemon=True)
         self._worker_started = False
 
@@ -418,12 +416,6 @@ class SpeechToTextController:
                     log.info("Dropped filler transcript from %s: %r", speaker, text)
                     continue
 
-                m = self.config.meeting
-                if speaker == m.system_label:
-                    self._echo.note_remote(text)
-                elif m.drop_mic_echo and speaker == m.mic_label and self._echo.is_echo(text):
-                    log.info("Dropped mic echo of the other party: %r", text)
-                    continue
                 log.info("[%s] %r", speaker, text)
                 if self.transcript is not None:
                     self.transcript.append(text, speaker=speaker)
