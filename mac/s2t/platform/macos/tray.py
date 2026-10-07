@@ -19,7 +19,7 @@ class MacTrayApp(rumps.App):
         on_reload: Callable[[], None],
         on_open_logs: Callable[[], None],
         on_open_transcript_folder: Callable[[], None],
-        on_enroll_voice: Callable[[], None],
+        on_memory_report: Callable[[], None],
         on_exit: Callable[[], None],
     ) -> None:
         super().__init__("s2t", title="🎙", quit_button=None)
@@ -29,7 +29,7 @@ class MacTrayApp(rumps.App):
         self._on_reload = on_reload
         self._on_open_logs = on_open_logs
         self._on_open_transcript_folder = on_open_transcript_folder
-        self._on_enroll_voice = on_enroll_voice
+        self._on_memory_report = on_memory_report
         self._on_exit = on_exit
 
         self._start_item = rumps.MenuItem("Start Meeting", callback=self._start_meeting)
@@ -38,11 +38,11 @@ class MacTrayApp(rumps.App):
             self._start_item,
             self._end_item,
             None,
-            rumps.MenuItem("Enroll My Voice", callback=self._enroll_voice),
             rumps.MenuItem("Settings", callback=self._settings),
             rumps.MenuItem("Reload Config", callback=self._reload),
             rumps.MenuItem("Open Logs", callback=self._open_logs),
             rumps.MenuItem("Open Transcript Folder", callback=self._open_transcript_folder),
+            rumps.MenuItem("Memory Report", callback=self._memory_report),
             None,
             rumps.MenuItem("Exit", callback=self._exit),
         ]
@@ -66,8 +66,8 @@ class MacTrayApp(rumps.App):
     def _open_transcript_folder(self, _) -> None:
         self._on_open_transcript_folder()
 
-    def _enroll_voice(self, _) -> None:
-        self._on_enroll_voice()
+    def _memory_report(self, _) -> None:
+        self._on_memory_report()
 
     def _exit(self, _) -> None:
         self._on_exit()

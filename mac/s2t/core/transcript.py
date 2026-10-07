@@ -35,11 +35,24 @@ class TranscriptWriter:
 
             date_str = now.strftime("%Y-%m-%d_%H-%M-%S")
             prefix = self._config.filename_prefix or "meeting"
-            filename = f"{prefix}_{date_str}.md"
-            self._path = output_dir / filename
-
             header = f"# {prefix.replace('-', ' ').replace('_', ' ').title()} — {now.strftime('%Y-%m-%d %H:%M')}\n\n"
-            self._path.write_text(header, encoding="utf-8")
+
+            # Names only resolve to the second, so ending one meeting and starting
+            # the next within that second (a double hotkey press is enough) used
+            # to reuse the name — and write_text() wiped the finished transcript.
+            # Mode "x" refuses to touch an existing file; take the next free name.
+            for attempt in range(1000):
+                suffix = "" if attempt == 0 else f"_{attempt + 1}"
+                candidate = output_dir / f"{prefix}_{date_str}{suffix}.md"
+                try:
+                    with candidate.open("x", encoding="utf-8") as f:
+                        f.write(header)
+                    break
+                except FileExistsError:
+                    continue
+            else:
+                raise RuntimeError(f"No free transcript filename for {prefix}_{date_str}")
+            self._path = candidate
             log.info("Transcript session opened: %s", self._path)
             return self._path
 

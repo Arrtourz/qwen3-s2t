@@ -274,13 +274,3 @@ def _resample_mono(audio: np.ndarray, src_sr: int, dst_sr: int) -> np.ndarray:
     src_idx = np.linspace(0, audio.size - 1, dst_n)
     return np.interp(src_idx, np.arange(audio.size), audio).astype(np.float32)
 
-
-def list_input_devices() -> list[tuple[int, str, int]]:
-    """Return [(index, name, max_input_channels)] for all input-capable devices."""
-    import sounddevice as sd
-
-    devices = []
-    for index, dev in enumerate(sd.query_devices()):
-        if dev.get("max_input_channels", 0) > 0:
-            devices.append((index, dev["name"], dev["max_input_channels"]))
-    return devices

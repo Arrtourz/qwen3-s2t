@@ -9,8 +9,11 @@ import numpy as np
 
 log = logging.getLogger(__name__)
 
-# Aggregate/tap identifiers. Kept stable so a leaked device from a crashed run
-# can be found and destroyed on the next launch.
+# Prefixes for the aggregate device; prepare() appends a per-activation suffix
+# (a fixed uid left CoreAudio holding a stale registration that PortAudio would
+# not re-expose). No cleanup-on-next-launch is needed: the device is created
+# "private", which scopes it to this process — verified by SIGKILLing a holder
+# and confirming the device is gone, so a crash cannot leave one behind.
 _AGG_UID = "com.zhenyxu.s2t.tap.agg"
 _AGG_NAME = "s2t System Audio"
 _TAP_NAME = "s2t-system-tap"

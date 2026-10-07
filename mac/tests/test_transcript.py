@@ -67,3 +67,18 @@ def test_transcript_ignore_blank_append(workspace_tmp_path: Path):
     content = writer.current_path.read_text(encoding="utf-8")
     # Only the header line should exist — no entry appended
     assert "**[" not in content
+
+
+def test_restart_within_same_second_does_not_overwrite(tmp_path):
+    from s2t.core.config import TranscriptConfig
+    from s2t.core.transcript import TranscriptWriter
+
+    w = TranscriptWriter(TranscriptConfig(enabled=True, output_dir=str(tmp_path), filename_prefix="meeting"))
+    first = w.open_session()
+    w.append("first meeting content", speaker="Me")
+    w.close_session()
+    second = w.open_session()
+    w.close_session()
+    assert first != second
+    assert "first meeting content" in first.read_text(encoding="utf-8")
+    assert second.name.endswith("_2.md")

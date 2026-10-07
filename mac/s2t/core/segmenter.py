@@ -28,6 +28,7 @@ class SilenceSegmenter:
         silence_hold_ms: int = 800,
         min_segment_ms: int = 400,
         max_segment_seconds: float = 20.0,
+        preroll_ms: int = 300,
         adaptive: bool = True,
         speech_factor: float = 2.5,
         target_peak: float = 0.35,
@@ -37,6 +38,10 @@ class SilenceSegmenter:
         self.silence_hold_samples = int(sample_rate * silence_hold_ms / 1000)
         self.min_segment_samples = int(sample_rate * min_segment_ms / 1000)
         self.max_segment_samples = int(sample_rate * max_segment_seconds)
+        # While no speech has been seen yet, only this much trailing audio is
+        # retained — enough to keep an utterance's onset, but bounded, so a
+        # silent stream cannot grow the buffer without limit.
+        self.preroll_samples = int(sample_rate * preroll_ms / 1000)
 
         # Adaptive mode tracks the ambient noise floor and treats a block as
         # speech when it rises clearly above it. This makes capture work across
@@ -85,6 +90,14 @@ class SilenceSegmenter:
             self._trailing_silence = 0
             self._has_speech = True
 
+        # Nothing has been spoken yet, so everything buffered so far is silence.
+        # Discard all but a short pre-roll: without this the buffer grows for as
+        # long as the stream stays quiet (a muted system tap emits pure digital
+        # silence indefinitely), and the eventual first utterance would drag all
+        # of that accumulated silence into one oversized segment.
+        if not self._has_speech:
+            self._trim_to_preroll()
+
         # Emit when a speech run is followed by enough trailing silence.
         if (
             self._has_speech
@@ -108,6 +121,12 @@ class SilenceSegmenter:
             self._reset()
             return None
         return self._drain()
+
+    def _trim_to_preroll(self) -> None:
+        """Drop leading blocks so at most ``preroll_samples`` stay buffered."""
+        while len(self._buffer) > 1 and self._buffered_samples - self._buffer[0].size >= self.preroll_samples:
+            self._buffered_samples -= self._buffer.pop(0).size
+        self._trailing_silence = min(self._trailing_silence, self._buffered_samples)
 
     def _drain(self) -> np.ndarray | None:
         if not self._buffer:

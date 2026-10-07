@@ -38,7 +38,6 @@ pip install -r requirements.txt
 ```bash
 cd mac
 python -m s2t
-python -m s2t --manual
 python -m s2t --model 1.7b
 python -m s2t --device cpu
 python -m s2t --backend lightweight --device cpu
@@ -75,9 +74,11 @@ Optional tweaks in **Settings**:
 - **Their Audio**: `System audio — auto` (default) · `Off` (mic only) · or a named device (e.g. BlackHole)
 - **Transcript folder** / **filename prefix** (with a Browse… picker)
 
-## Capturing Zoom / System Audio (Meeting Transcription)
+## Capturing Zoom / System Audio — Alternative: BlackHole
 
-macOS does not expose system audio to apps directly. Use **BlackHole** as a virtual loopback device:
+Not needed by default: the system tap (`system_source = "tap"`) already captures
+the other party with no setup. Use BlackHole only if the tap is unavailable on
+your macOS version.
 
 1. Install BlackHole 2ch:
    ```bash
@@ -86,20 +87,28 @@ macOS does not expose system audio to apps directly. Use **BlackHole** as a virt
 2. Open **Audio MIDI Setup** → click `+` → **Create Multi-Output Device**
    - Check both your speakers and **BlackHole 2ch**
    - Set this as your system output (Sound → Output)
-3. In **s2t Settings** (tray icon → Settings), set **Input Device** to `BlackHole 2ch`
-4. Reload Config — s2t now captures what Zoom plays
+3. In `config.toml` set:
+   ```toml
+   [meeting]
+   system_source = "device"
+   system_device = "BlackHole 2ch"
+   ```
+4. Menu → **Reload Config**
 
-To revert to mic-only, clear the Input Device field and reload.
+To go back, set `system_source = "tap"` (or `"off"` for mic only) and reload.
 
-## Hotkey
+## Hotkey (optional)
 
-Default: `ctrl+alt+h`
+The app is driven from the menu bar; the hotkey is an optional extra that
+toggles Start Meeting / End Meeting. It is **off by default** (`hotkey = "none"`).
 
-- First press in `continuous` mode: starts recording
-- Subsequent presses: snapshot (transcribe buffered audio, keep recording)
-- In `manual` mode: first press starts, second press stops and transcribes
+To turn it on, set e.g. `hotkey = "ctrl+alt+h"` in `~/.config/s2t/config.toml`
+and choose Reload Config. Registration needs Accessibility permission and is
+skipped with a log warning if that is missing, so a hotkey problem never blocks
+the menu.
 
-Change in Settings or edit `~/.config/s2t/config.toml`.
+There are no `continuous` / `manual` recording modes here — those belong to the
+Windows app. A meeting records continuously from Start to End.
 
 ## Transcript Files
 
@@ -131,13 +140,16 @@ filename_prefix = "meeting"
 
 | Item | Action |
 |------|--------|
-| Start / Snapshot | Hotkey equivalent |
-| Stop | Stop and transcribe current buffer |
-| Settings | Open settings window |
-| Reload Config | Reload config.toml without restart |
-| Open Logs | Open log directory in Finder |
-| Open Transcript | Open current session transcript in Finder |
-| Exit | Quit app |
+| Start Meeting | Begin recording both streams (icon turns 🔴) |
+| End Meeting | Stop, flush the last utterance, close the transcript |
+| Settings | Open `config.toml` in your editor (then use Reload Config) |
+| Reload Config | Reload `config.toml` without restarting |
+| Open Logs | Open the log directory in Finder |
+| Open Transcript Folder | Open the transcript folder in Finder |
+| Memory Report | Log a memory snapshot now (see Debugging) |
+| Exit | Quit the app |
+
+Start Meeting and End Meeting are enabled one at a time, matching the current state.
 
 ## Tests
 
@@ -146,11 +158,48 @@ cd mac
 pytest -q
 ```
 
+## Debugging Memory
+
+`ps` and Activity Monitor disagree for this app: Metal/MPS buffers never show up
+in RSS, so only Activity Monitor's figure (phys_footprint) is meaningful.
+
+Turn on periodic memory logging either way:
+
+```bash
+S2T_MEMORY_DEBUG=1 python -m s2t
+```
+
+```toml
+[debug]
+memory_monitor = true
+memory_monitor_interval_seconds = 60.0
+```
+
+Menu -> **Memory Report** logs one snapshot on demand, with or without the monitor.
+
+Each line looks like:
+
+```
+MEM footprint=3780MB  mps_in_use=1975MB  mps_cache=72MB  queue=0  buffered=0.4s  objects=346836
+```
+
+| Field | Rising means |
+|-------|--------------|
+| `mps_in_use` | a real tensor leak — the only field that proves one |
+| `mps_cache` | just allocator slack; released when the queue goes idle |
+| `buffered` | audio piling up in a stream's segmenter |
+| `queue` | transcription falling behind; oldest segments get dropped |
+| `objects` | a Python-side leak |
+
+`footprint` alone swings by ~1GB with utterance length and kernel reclaim timing,
+so judge leaks by `mps_in_use` and `objects`, not by `footprint`.
+
 ## Troubleshooting
 
 | Symptom | Fix |
 |---------|-----|
 | Hotkey not working | Add Terminal / Python binary to Accessibility in System Settings |
 | No audio captured | Grant Microphone access; check input device name matches `sounddevice` device list |
-| MPS out of memory | Switch to `--model 0.6b --device mps` or `--device cpu` |
+| MPS out of memory | Switch to `--device cpu`, or set `model.variant = "0.6b"` |
+| Memory looks high in Activity Monitor | Expected to sit around 2.5-3.8GB mid-meeting; see Debugging below |
 | `rumps` import error | macOS only; ensure you're not running on Linux/Windows |

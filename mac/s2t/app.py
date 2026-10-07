@@ -11,10 +11,10 @@ from .platform.macos.instance_lock import SingleInstanceLock
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
+    # No --manual/--continuous here: those are Windows recording modes. This app
+    # records a whole meeting between Start Meeting and End Meeting, so nothing
+    # ever read recording.mode and the flags silently did nothing.
     parser = argparse.ArgumentParser(description="macOS speech-to-text menu bar app")
-    mode_group = parser.add_mutually_exclusive_group()
-    mode_group.add_argument("--manual", action="store_true", help="Manual start/stop recording mode")
-    mode_group.add_argument("--continuous", action="store_true", help="Force continuous recording mode")
     parser.add_argument("--model", choices=["0.6b", "1.7b"], help="ASR model variant")
     parser.add_argument("--backend", choices=["python", "lightweight"], help="ASR backend")
     parser.add_argument("--device", choices=["auto", "cpu", "gpu"], help="Compute device")
@@ -25,7 +25,6 @@ def main(argv: list[str] | None = None) -> None:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
 
-    mode_override = "manual" if args.manual else "continuous" if args.continuous else None
     provider_override = {"python": "qwen3_asr", "lightweight": "qwen_asr_cli"}.get(args.backend)
 
     config_override = os.environ.get("S2T_CONFIG_PATH", "").strip()
@@ -38,7 +37,6 @@ def main(argv: list[str] | None = None) -> None:
 
     controller = SpeechToTextController(
         config_path=config_path,
-        recording_mode_override=mode_override,
         provider_override=provider_override,
         model_variant_override=args.model,
         device_override=args.device,

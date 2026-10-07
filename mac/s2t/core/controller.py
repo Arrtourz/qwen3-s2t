@@ -25,25 +25,27 @@ from .config import (
     load_config,
     normalize_model_config,
 )
+from .memory_debug import MemoryMonitor, enabled_from_env
 from .transcript import TranscriptWriter
-from .voice import has_voice, is_filler, voice_metrics
-from .speaker_id import SpeakerVerifier, VoiceProfile
+from .voice import is_filler, voice_metrics
 
 
 log = logging.getLogger(__name__)
+
+# Upper bound on utterances waiting to be transcribed. Transcription is much
+# faster than real time, so reaching this means something is badly wrong.
+MAX_PENDING_SEGMENTS = 32
 
 
 class SpeechToTextController:
     def __init__(
         self,
         config_path: Path | None = None,
-        recording_mode_override: str | None = None,
         provider_override: str | None = None,
         model_variant_override: str | None = None,
         device_override: str | None = None,
     ) -> None:
         self.config_path = config_path or default_config_path()
-        self.recording_mode_override = recording_mode_override
         self.provider_override = provider_override
         self.model_variant_override = model_variant_override
         self.device_override = device_override
@@ -54,16 +56,22 @@ class SpeechToTextController:
         self.hotkey: GlobalHotkeyService | None = None
         self.tray: MacTrayApp | None = None
         self.transcript: TranscriptWriter | None = None
-        self.verifier: SpeakerVerifier | None = None
-        self.profile = VoiceProfile(default_config_path().parent / "voice_profile.json")
+        self.memory_monitor: MemoryMonitor | None = None
 
         self._meeting_lock = threading.Lock()
         self._meeting_active = False
         self._model_ready = False
         self._hotkey_registered = False
         # Queue of (speaker_label, audio_16k) utterances awaiting transcription.
-        self._queue: queue.Queue[tuple[str, np.ndarray]] = queue.Queue()
+        # Bounded: a segment can be up to max_segment_seconds of float32 audio
+        # (~1.3MB at 20s), so an unbounded queue would grow without limit if
+        # transcription ever fell behind speech. Oldest waiting segments are
+        # dropped first — a stale backlog is worth less than keeping up.
+        self._queue: queue.Queue[tuple[str, np.ndarray]] = queue.Queue(maxsize=MAX_PENDING_SEGMENTS)
         self._stop_event = threading.Event()
+        self._toggle_requested = threading.Event()
+        self._idle_timer: threading.Timer | None = None
+        self._finisher: threading.Thread | None = None
         self._worker = threading.Thread(target=self._worker_loop, daemon=True)
         self._worker_started = False
 
@@ -81,14 +89,28 @@ class SpeechToTextController:
         # (status, message) set by the background thread, consumed on main thread.
         self._init_status: str | None = None
         self._init_message: str = ""
-        self.tray.set_ready_poller(self._apply_init_status)
+        self.tray.set_ready_poller(self._main_thread_tick)
 
         threading.Thread(target=self._background_init, daemon=True).start()
         self.tray.run()
 
+    def _main_thread_tick(self) -> None:
+        """Runs on the main thread (rumps timer, ~4x/sec)."""
+        self._apply_init_status()
+        # A hotkey press arrives on pynput's listener thread; acting on it there
+        # would update the status-bar title off the main thread. It only sets
+        # this flag, and the toggle happens here instead.
+        if self._toggle_requested.is_set():
+            self._toggle_requested.clear()
+            self.toggle_meeting()
+
+    def _request_toggle(self) -> None:
+        """Hotkey callback: safe to call from any thread."""
+        self._toggle_requested.set()
+
     def _apply_init_status(self) -> None:
-        """Runs on the main thread (rumps timer). Applies pending init result."""
-        status = self._init_status
+        """Applies the pending background-init result. Main thread only."""
+        status = getattr(self, "_init_status", None)
         if status is None:
             return
         self._init_status = None
@@ -105,8 +127,6 @@ class SpeechToTextController:
     def _resolve_config(self) -> None:
         config = load_config(self.config_path)
 
-        if self.recording_mode_override is not None:
-            config = replace(config, recording=replace(config.recording, mode=self.recording_mode_override))
         if self.provider_override is not None:
             reset = config.model.provider != self.provider_override
             config = replace(
@@ -139,7 +159,7 @@ class SpeechToTextController:
                 on_reload=self.reload_config,
                 on_open_logs=self.open_logs,
                 on_open_transcript_folder=self.open_transcript_folder,
-                on_enroll_voice=self.enroll_voice,
+                on_memory_report=self.log_memory_report,
                 on_exit=self.shutdown,
             )
         self.tray.set_loading(True)
@@ -149,6 +169,7 @@ class SpeechToTextController:
             self._load_heavy(previous=None)
             self._model_ready = True
             self._init_status = "ok"
+            self._schedule_idle_unload()
             log.info("Runtime loaded from %s", self.config_path)
         except Exception as exc:
             log.exception("Background init failed")
@@ -172,13 +193,23 @@ class SpeechToTextController:
                 self.transcript.close_session()
             self.transcript = TranscriptWriter(config.transcript)
 
-        # Load the speaker-verification model only when the filter is enabled.
-        if config.meeting.speaker_filter and self.verifier is None:
-            self.verifier = SpeakerVerifier()
 
         if not self._worker_started:
             self._worker.start()
             self._worker_started = True
+
+        self._start_memory_monitor()
+
+    def _start_memory_monitor(self) -> None:
+        """Start the memory monitor if config or S2T_MEMORY_DEBUG asks for it."""
+        if self.memory_monitor is not None or self.config is None:
+            return
+        if not (self.config.debug.memory_monitor or enabled_from_env()):
+            return
+        self.memory_monitor = MemoryMonitor(
+            self, interval_seconds=self.config.debug.memory_monitor_interval_seconds
+        )
+        self.memory_monitor.start()
 
     def _register_hotkey_main_thread(self) -> None:
         """Register the OPTIONAL global hotkey.
@@ -198,7 +229,7 @@ class SpeechToTextController:
         if self.hotkey is None:
             self.hotkey = GlobalHotkeyService()
         try:
-            self.hotkey.register(self.config.hotkey, self.toggle_meeting)
+            self.hotkey.register(self.config.hotkey, self._request_toggle)
         except Exception:
             log.warning("Hotkey registration failed (Accessibility not granted?); use the menu instead", exc_info=True)
 
@@ -216,6 +247,7 @@ class SpeechToTextController:
             # reload_config runs on the main thread (menu action), so re-registering
             # the hotkey here is safe.
             self._register_hotkey_main_thread()
+            self._schedule_idle_unload()
             self._notify("s2t", "Config reloaded.")
         except ConfigError as exc:
             log.exception("Failed to reload config")
@@ -237,6 +269,18 @@ class SpeechToTextController:
             if not self._model_ready or self.recorder is None:
                 self._notify("s2t", "Still loading the model… try again in a moment.")
                 return
+
+            # The previous meeting may still be transcribing its last segments
+            # into its own file; let it finish before a new file is opened.
+            if self._finisher is not None and self._finisher.is_alive():
+                self._finisher.join(timeout=30)
+            self._cancel_idle_unload()
+            if self.backend is not None and not self.backend.is_loaded:
+                # Unloaded while idle. Reload in the background so recording
+                # starts now; early segments wait in the queue (the worker blocks
+                # on the backend lock until the model is back).
+                log.info("Reloading ASR model for the new meeting")
+                threading.Thread(target=self.backend.load_model, daemon=True, name="asr-reload").start()
 
             if self.config.transcript.enabled and self.transcript is not None:
                 self.transcript.open_session()
@@ -270,12 +314,50 @@ class SpeechToTextController:
             if self.tray is not None:
                 self.tray.set_recording(False)
             beep("done")
-            # Close the transcript so the NEXT meeting starts a fresh, separate
-            # file (otherwise open_session() reuses the still-open path).
-            if self.transcript is not None:
-                self.transcript.close_session()
             log.info("Meeting ended")
-            self._notify("Meeting ended", "Transcript saved")
+            # recorder.stop() just flushed each stream's last utterance into the
+            # queue. Closing the transcript here dropped those: the worker wrote
+            # them after the file was closed, so a meeting's final sentence
+            # vanished. Finish on a thread so the menu stays responsive.
+            self._finisher = threading.Thread(target=self._finish_meeting, daemon=True, name="meeting-finish")
+            self._finisher.start()
+
+    def _finish_meeting(self) -> None:
+        """Drain the queue into this meeting's file, close it, then free memory."""
+        self._queue.join()
+        if self.transcript is not None:
+            self.transcript.close_session()
+        self._notify("Meeting ended", "Transcript saved")
+        # The app stays resident between meetings: give back the GPU cache now,
+        # and the model itself after the idle timeout.
+        if self.backend is not None:
+            self.backend.release_cached_memory(min_slack_bytes=0)
+        if self.memory_monitor is not None:
+            self.memory_monitor.log_once()
+        self._schedule_idle_unload()
+
+    def _schedule_idle_unload(self) -> None:
+        self._cancel_idle_unload()
+        minutes = self.config.memory.idle_unload_minutes if self.config is not None else 0
+        if minutes <= 0 or self._stop_event.is_set():
+            return
+        self._idle_timer = threading.Timer(minutes * 60, self._idle_unload)
+        self._idle_timer.daemon = True
+        self._idle_timer.start()
+
+    def _cancel_idle_unload(self) -> None:
+        if self._idle_timer is not None:
+            self._idle_timer.cancel()
+            self._idle_timer = None
+
+    def _idle_unload(self) -> None:
+        # Under the meeting lock so a meeting cannot start mid-unload.
+        with self._meeting_lock:
+            if self._meeting_active or self.backend is None or not self._queue.empty():
+                return
+            self.backend.unload()
+        if self.memory_monitor is not None:
+            self.memory_monitor.log_once()
 
     def _on_segment(self, speaker: str, audio: np.ndarray) -> None:
         """Called from an audio thread when a segmenter completes an utterance."""
@@ -298,34 +380,28 @@ class SpeechToTextController:
                 dur, speaker, ratio * 100, rms, zcr, min_ratio * 100, frame_rms,
             )
             return
-        # Speaker filter: only the mic ("Me") stream, and only if enabled +
-        # enrolled. Keeps the segment only if it matches the enrolled voiceprint.
-        if (
-            m is not None
-            and m.speaker_filter
-            and speaker == m.mic_label
-            and self.profile.enrolled
-            and self.verifier is not None
-        ):
-            try:
-                emb = self.verifier.embed(audio)
-                ref = self.profile.load()
-                sim = self.verifier.cosine(emb, ref)
-                if sim < m.speaker_threshold:
-                    log.info(
-                        "Dropped non-owner %.2fs from %s (speaker sim=%.3f < %.2f)",
-                        dur, speaker, sim, m.speaker_threshold,
-                    )
-                    return
-                log.info("Speaker match %.2fs from %s (sim=%.3f)", dur, speaker, sim)
-            except Exception:
-                log.exception("Speaker verification failed; keeping segment")
-
         log.info(
             "Queued %.2fs from %s (voiced=%.0f%% RMS=%.5f ZCR=%.3f)",
             dur, speaker, ratio * 100, rms, zcr,
         )
-        self._queue.put((speaker, audio))
+        self._enqueue(speaker, audio)
+
+    def _enqueue(self, speaker: str, audio: np.ndarray) -> None:
+        """Queue an utterance, evicting the oldest if the backlog is full."""
+        while True:
+            try:
+                self._queue.put_nowait((speaker, audio))
+                return
+            except queue.Full:
+                try:
+                    dropped, stale = self._queue.get_nowait()
+                except queue.Empty:
+                    continue  # the worker drained it first; retry the put
+                self._queue.task_done()  # evicted: count it as handled for join()
+                log.warning(
+                    "Transcription backlog full (%d); dropped oldest %.2fs segment from %s",
+                    MAX_PENDING_SEGMENTS, len(stale) / 16000.0, dropped,
+                )
 
     def _worker_loop(self) -> None:
         while not self._stop_event.is_set():
@@ -352,6 +428,29 @@ class SpeechToTextController:
             except Exception as exc:
                 log.exception("Processing failed")
                 self._notify("Transcription failed", str(exc))
+            finally:
+                # Caught up on the backlog: a good moment to hand back cached GPU
+                # memory, since the small rebuild cost lands on an utterance that
+                # nothing is waiting behind. Without this the cache keeps every
+                # shape a long meeting ever produced.
+                try:
+                    if self._queue.empty() and self.backend is not None:
+                        self.backend.release_cached_memory()
+                finally:
+                    # Must run for every item, or End Meeting's queue.join()
+                    # would wait forever.
+                    self._queue.task_done()
+
+    def log_memory_report(self) -> None:
+        """Log a memory snapshot on demand, whether or not the monitor is on."""
+        from .memory_debug import sample
+
+        if self.memory_monitor is not None:
+            snapshot = self.memory_monitor.log_once()
+        else:
+            snapshot = sample(self)
+            log.info("MEM (on demand) %s", snapshot.format())
+        self._notify("Memory", f"{snapshot.footprint_mb:.0f}MB — details in the log")
 
     def open_logs(self) -> None:
         log_file = default_log_file()
@@ -368,58 +467,6 @@ class SpeechToTextController:
         if self.config is not None and self.config.transcript.output_dir:
             return Path(self.config.transcript.output_dir)
         return default_transcript_dir()
-
-    def enroll_voice(self) -> None:
-        """Record ~10s from the mic and save it as the owner's voiceprint.
-
-        Runs the recording + embedding on a background thread so the menu-bar UI
-        stays responsive. Enables speaker_filter in config on success.
-        """
-        if self._meeting_active:
-            self._notify("s2t", "End the current meeting before enrolling your voice")
-            return
-        threading.Thread(target=self._enroll_worker, daemon=True).start()
-
-    def _enroll_worker(self) -> None:
-        import sounddevice as sd
-        from ..platform.macos.meeting_audio import resolve_mic_device
-
-        try:
-            self._notify("Enroll voice", "Recording 10s — speak normally now.")
-            beep("start")
-            device = resolve_mic_device(self.config.meeting.mic_device if self.config else "")
-            audio = sd.rec(int(16000 * 10), samplerate=16000, channels=1, dtype="float32", device=device)
-            sd.wait()
-            audio = audio.reshape(-1)
-
-            peak = float(np.max(np.abs(audio))) if audio.size else 0.0
-            if peak < 0.05:
-                beep("error")
-                self._notify("Enroll failed", "Too quiet — speak louder and try again.")
-                return
-
-            if self.verifier is None:
-                self.verifier = SpeakerVerifier()
-            emb = self.verifier.embed(audio)
-            self.profile.save(emb)
-
-            # Turn the filter on now that a profile exists, and persist it.
-            if self.config is not None and not self.config.meeting.speaker_filter:
-                from .config import save_config
-
-                self.config = replace(
-                    self.config,
-                    meeting=replace(self.config.meeting, speaker_filter=True),
-                )
-                save_config(self.config, self.config_path)
-
-            beep("done")
-            self._notify("Voice enrolled", "Speaker filter is now ON.")
-            log.info("Voice profile enrolled and speaker filter enabled")
-        except Exception as exc:
-            log.exception("Voice enrollment failed")
-            beep("error")
-            self._notify("Enroll failed", str(exc))
 
     def open_settings(self) -> None:
         """Open the config file for editing.
@@ -441,6 +488,9 @@ class SpeechToTextController:
             return
         log.info("Shutting down")
         self._stop_event.set()
+        if self.memory_monitor is not None:
+            self.memory_monitor.stop()
+        self._cancel_idle_unload()
         if self.hotkey is not None:
             self.hotkey.unregister()
         if self.recorder is not None and self._meeting_active:

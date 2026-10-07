@@ -63,6 +63,33 @@ def test_two_utterances_split():
     assert len(segments) == 2
 
 
+def test_long_silence_does_not_grow_buffer():
+    # A muted stream (e.g. the system tap with nothing playing) emits digital
+    # silence forever; the buffer must stay bounded by the pre-roll.
+    seg = SilenceSegmenter(SR, silence_hold_ms=500, preroll_ms=300)
+    assert _feed(seg, _silence(120.0)) == []
+    assert seg._buffered_samples <= int(SR * 0.3) + int(SR * 0.1)  # pre-roll + one block
+
+
+def test_utterance_after_long_silence_is_not_padded():
+    # Before the pre-roll cap, the first utterance dragged every preceding
+    # second of silence into one oversized segment.
+    seg = SilenceSegmenter(SR, silence_hold_ms=500, min_segment_ms=300, preroll_ms=300)
+    audio = np.concatenate([_silence(60.0), _speech(0.8), _silence(0.8)])
+    segments = _feed(seg, audio)
+    assert len(segments) == 1
+    assert segments[0].size / SR < 2.5  # speech + pre-roll + hold, not 60s
+
+
+def test_preroll_keeps_utterance_onset():
+    seg = SilenceSegmenter(SR, silence_hold_ms=500, min_segment_ms=300, preroll_ms=300)
+    audio = np.concatenate([_silence(30.0), _speech(1.0), _silence(0.8)])
+    segments = _feed(seg, audio)
+    assert len(segments) == 1
+    # The full utterance survives: at least the 1.0s of speech is present.
+    assert segments[0].size >= int(SR * 1.0)
+
+
 def _quiet_speech(seconds: float, amp: float) -> np.ndarray:
     n = int(SR * seconds)
     t = np.arange(n) / SR

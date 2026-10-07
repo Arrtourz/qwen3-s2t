@@ -15,8 +15,12 @@ else:
 
 
 APP_DIR_NAME = "s2t"
-DEFAULT_HOTKEY = "ctrl+alt+h"
-DEFAULT_RECORDING_MODE = "continuous"
+# Off by default, matching the generated config and what the app documents.
+# pynput's macOS listener installs a CoreGraphics event tap that is fragile in a
+# packaged .app, and the menu bar drives everything, so a config.toml that simply
+# omits "hotkey" must not silently switch that event tap on. Suggested value for
+# anyone who does want one: "ctrl+alt+h".
+DEFAULT_HOTKEY = "none"
 MODEL_PROVIDERS = {
     "qwen3_asr",
     "qwen_asr_cli",
@@ -45,20 +49,9 @@ class ModelConfig:
 
 @dataclass(frozen=True)
 class RecordingConfig:
-    mode: str = DEFAULT_RECORDING_MODE
     sample_rate: int = 16000
     channels: int = 1
-    continuous_window_seconds: int = 60
     block_duration_ms: int = 100
-    # Name of the sounddevice input device, empty string = default mic
-    input_device: str = ""
-
-
-@dataclass(frozen=True)
-class PasteConfig:
-    multiline_strategy: str = "block"
-    settle_delay_ms: int = 60
-    line_delay_ms: int = 30
 
 
 @dataclass(frozen=True)
@@ -89,14 +82,6 @@ class MeetingConfig:
     voice_frame_rms: float = 0.045
     voice_max_zcr: float = 0.32
     voice_min_voiced_ratio: float = 0.30
-    # Speaker verification (WavLM voiceprint). When enabled AND a voice profile
-    # has been enrolled, the mic ("Me") stream keeps a segment only if its
-    # speaker embedding matches the enrolled profile with cosine similarity >=
-    # speaker_threshold. This filters out colleagues/others captured by the mic.
-    # Only applies to the mic stream — the system-tap ("Them") stream is never
-    # speaker-filtered. Disabled by default (needs enrollment first).
-    speaker_filter: bool = False
-    speaker_threshold: float = 0.55
 
 
 @dataclass(frozen=True)
@@ -112,15 +97,34 @@ class LoggingConfig:
 
 
 @dataclass(frozen=True)
+class MemoryConfig:
+    # Unload the ASR model after this many minutes with no meeting running, and
+    # reload it (~4-5s) when the next meeting starts. Resident between meetings
+    # the model holds ~2.4GB; unloaded the app idles at ~0.5GB. 0 = never unload.
+    idle_unload_minutes: float = 10.0
+
+
+@dataclass(frozen=True)
+class DebugConfig:
+    # Periodically log memory use to the normal log file. Off by default; the
+    # env var S2T_MEMORY_DEBUG=1 turns it on without editing config.toml.
+    # Watch mps_in_use for a real tensor leak and mps_cache for allocator slack;
+    # buffered tracks audio held in the segmenters.
+    memory_monitor: bool = False
+    memory_monitor_interval_seconds: float = 60.0
+
+
+@dataclass(frozen=True)
 class AppConfig:
     hotkey: str
     language: str
     model: ModelConfig
     recording: RecordingConfig
-    paste: PasteConfig
     transcript: TranscriptConfig
     meeting: MeetingConfig
     logging: LoggingConfig
+    memory: MemoryConfig = MemoryConfig()
+    debug: DebugConfig = DebugConfig()
 
 
 def app_data_dir() -> Path:
@@ -183,17 +187,9 @@ device = "auto"
 binary_path = ""
 
 [recording]
-mode = "{DEFAULT_RECORDING_MODE}"
 sample_rate = 16000
 channels = 1
-continuous_window_seconds = 60
 block_duration_ms = 100
-input_device = ""
-
-[paste]
-multiline_strategy = "block"
-settle_delay_ms = 60
-line_delay_ms = 30
 
 [transcript]
 enabled = true
@@ -213,11 +209,20 @@ max_segment_seconds = 20.0
 voice_frame_rms = 0.045
 voice_max_zcr = 0.32
 voice_min_voiced_ratio = 0.30
-speaker_filter = false
-speaker_threshold = 0.55
 
 [logging]
 level = "INFO"
+
+[memory]
+# Unload the ASR model after this many idle minutes between meetings (~2.4GB
+# freed); it reloads in ~4-5s when the next meeting starts. 0 = keep it loaded.
+idle_unload_minutes = 10.0
+
+[debug]
+# Log memory use periodically (footprint / MPS in-use / MPS cache / buffered audio).
+# Equivalent to setting S2T_MEMORY_DEBUG=1 in the environment.
+memory_monitor = false
+memory_monitor_interval_seconds = 60.0
 """
 
 
@@ -249,10 +254,11 @@ def _parse_config(raw: dict) -> AppConfig:
 
     model_raw = raw.get("model", {})
     recording_raw = raw.get("recording", {})
-    paste_raw = raw.get("paste", {})
     transcript_raw = raw.get("transcript", {})
     meeting_raw = raw.get("meeting", {})
     logging_raw = raw.get("logging", {})
+    debug_raw = raw.get("debug", {})
+    memory_raw = raw.get("memory", {})
 
     model = ModelConfig(
         provider=str(model_raw.get("provider", "qwen3_asr")).strip().lower(),
@@ -264,23 +270,10 @@ def _parse_config(raw: dict) -> AppConfig:
     model = normalize_model_config(model)
 
     recording = RecordingConfig(
-        mode=str(recording_raw.get("mode", DEFAULT_RECORDING_MODE)).strip().lower(),
         sample_rate=int(recording_raw.get("sample_rate", 16000)),
         channels=int(recording_raw.get("channels", 1)),
-        continuous_window_seconds=int(recording_raw.get("continuous_window_seconds", 60)),
         block_duration_ms=int(recording_raw.get("block_duration_ms", 100)),
-        input_device=str(recording_raw.get("input_device", "")).strip(),
     )
-    if recording.mode not in {"manual", "continuous"}:
-        raise ConfigError("recording.mode must be 'manual' or 'continuous'")
-
-    paste = PasteConfig(
-        multiline_strategy=str(paste_raw.get("multiline_strategy", "block")).strip().lower(),
-        settle_delay_ms=int(paste_raw.get("settle_delay_ms", 60)),
-        line_delay_ms=int(paste_raw.get("line_delay_ms", 30)),
-    )
-    if paste.multiline_strategy not in {"line_by_line", "block"}:
-        raise ConfigError("paste.multiline_strategy must be 'line_by_line' or 'block'")
 
     transcript = TranscriptConfig(
         enabled=bool(transcript_raw.get("enabled", True)),
@@ -301,8 +294,6 @@ def _parse_config(raw: dict) -> AppConfig:
         voice_frame_rms=float(meeting_raw.get("voice_frame_rms", 0.045)),
         voice_max_zcr=float(meeting_raw.get("voice_max_zcr", 0.32)),
         voice_min_voiced_ratio=float(meeting_raw.get("voice_min_voiced_ratio", 0.30)),
-        speaker_filter=bool(meeting_raw.get("speaker_filter", False)),
-        speaker_threshold=float(meeting_raw.get("speaker_threshold", 0.55)),
     )
     if meeting.system_source not in {"tap", "device", "off"}:
         raise ConfigError("meeting.system_source must be 'tap', 'device', or 'off'")
@@ -317,15 +308,27 @@ def _parse_config(raw: dict) -> AppConfig:
         level=str(logging_raw.get("level", "INFO")).strip().upper() or "INFO"
     )
 
+    memory_cfg = MemoryConfig(
+        idle_unload_minutes=float(memory_raw.get("idle_unload_minutes", 10.0)),
+    )
+    if memory_cfg.idle_unload_minutes < 0:
+        raise ConfigError("memory.idle_unload_minutes must be >= 0 (0 disables unloading)")
+
+    debug_cfg = DebugConfig(
+        memory_monitor=bool(debug_raw.get("memory_monitor", False)),
+        memory_monitor_interval_seconds=float(debug_raw.get("memory_monitor_interval_seconds", 60.0)),
+    )
+
     return AppConfig(
         hotkey=hotkey,
         language=language,
         model=model,
         recording=recording,
-        paste=paste,
         transcript=transcript,
         meeting=meeting,
         logging=logging_cfg,
+        memory=memory_cfg,
+        debug=debug_cfg,
     )
 
 
@@ -394,17 +397,9 @@ device = {_s(config.model.device)}
 binary_path = {_s(config.model.binary_path)}
 
 [recording]
-mode = {_s(config.recording.mode)}
 sample_rate = {config.recording.sample_rate}
 channels = {config.recording.channels}
-continuous_window_seconds = {config.recording.continuous_window_seconds}
 block_duration_ms = {config.recording.block_duration_ms}
-input_device = {_s(config.recording.input_device)}
-
-[paste]
-multiline_strategy = {_s(config.paste.multiline_strategy)}
-settle_delay_ms = {config.paste.settle_delay_ms}
-line_delay_ms = {config.paste.line_delay_ms}
 
 [transcript]
 enabled = {"true" if config.transcript.enabled else "false"}
@@ -424,9 +419,14 @@ max_segment_seconds = {config.meeting.max_segment_seconds}
 voice_frame_rms = {config.meeting.voice_frame_rms}
 voice_max_zcr = {config.meeting.voice_max_zcr}
 voice_min_voiced_ratio = {config.meeting.voice_min_voiced_ratio}
-speaker_filter = {"true" if config.meeting.speaker_filter else "false"}
-speaker_threshold = {config.meeting.speaker_threshold}
 
 [logging]
 level = {_s(config.logging.level)}
+
+[memory]
+idle_unload_minutes = {config.memory.idle_unload_minutes}
+
+[debug]
+memory_monitor = {"true" if config.debug.memory_monitor else "false"}
+memory_monitor_interval_seconds = {config.debug.memory_monitor_interval_seconds}
 """
