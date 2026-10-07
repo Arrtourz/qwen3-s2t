@@ -50,7 +50,6 @@ class ModelConfig:
 @dataclass(frozen=True)
 class RecordingConfig:
     sample_rate: int = 16000
-    channels: int = 1
     block_duration_ms: int = 100
 
 
@@ -67,7 +66,6 @@ class MeetingConfig:
     mic_label: str = "\U0001f3a4 Me"
     system_label: str = "\U0001f50a Them"
     # Silence-based segmentation tuning (latency is not a concern here).
-    silence_rms: float = 0.008
     silence_hold_ms: int = 800
     min_segment_ms: int = 400
     max_segment_seconds: float = 20.0
@@ -82,6 +80,10 @@ class MeetingConfig:
     voice_frame_rms: float = 0.045
     voice_max_zcr: float = 0.32
     voice_min_voiced_ratio: float = 0.30
+    # Drop a mic ("Me") line that repeats what the system tap ("Them") just
+    # said: with laptop speakers the mic re-records the other party, so every
+    # remote sentence otherwise appears twice. Harmless with headphones.
+    drop_mic_echo: bool = True
 
 
 @dataclass(frozen=True)
@@ -170,14 +172,16 @@ def default_lightweight_model_dir(variant: str = DEFAULT_MODEL_VARIANT) -> Path:
 
 def _default_config_text() -> str:
     return f"""# s2t config — edit this file, then choose "Reload Config" from the menu.
-# language: transcription language, e.g. "Chinese" or "English"
+# language: "auto" detects per utterance (best for mixed Chinese/English).
+#   A fixed language like "English" is only a hint, and it makes the model
+#   translate short phrases ("在这里" -> "In here.") and hallucinate on noise.
 # [meeting] mic_device: "" = default mic; or a device name from your system
 # [meeting] system_source: "tap" = capture system audio (Zoom/other party),
 #   "off" = my mic only, "device" = read from system_device by name
 # [transcript] output_dir: "" = ~/Documents/s2t-transcripts
 
 hotkey = "none"
-language = "Chinese"
+language = "auto"
 
 [model]
 provider = "qwen3_asr"
@@ -188,7 +192,6 @@ binary_path = ""
 
 [recording]
 sample_rate = 16000
-channels = 1
 block_duration_ms = 100
 
 [transcript]
@@ -202,13 +205,13 @@ system_source = "tap"
 system_device = ""
 mic_label = "\U0001f3a4 Me"
 system_label = "\U0001f50a Them"
-silence_rms = 0.008
 silence_hold_ms = 800
 min_segment_ms = 400
 max_segment_seconds = 20.0
 voice_frame_rms = 0.045
 voice_max_zcr = 0.32
 voice_min_voiced_ratio = 0.30
+drop_mic_echo = true
 
 [logging]
 level = "INFO"
@@ -250,7 +253,10 @@ def save_config(config: AppConfig, path: Path | None = None) -> Path:
 def _parse_config(raw: dict) -> AppConfig:
     # Empty/"none" hotkey = menu-only control (the hotkey is optional).
     hotkey = str(raw.get("hotkey", DEFAULT_HOTKEY)).strip() or "none"
-    language = str(raw.get("language", "Chinese")).strip() or "Chinese"
+    # Empty used to silently mean "Chinese"; it now means auto-detect, as does "auto".
+    language = str(raw.get("language", "auto")).strip() or "auto"
+    if language.lower() == "auto":
+        language = "auto"
 
     model_raw = raw.get("model", {})
     recording_raw = raw.get("recording", {})
@@ -271,7 +277,6 @@ def _parse_config(raw: dict) -> AppConfig:
 
     recording = RecordingConfig(
         sample_rate=int(recording_raw.get("sample_rate", 16000)),
-        channels=int(recording_raw.get("channels", 1)),
         block_duration_ms=int(recording_raw.get("block_duration_ms", 100)),
     )
 
@@ -287,18 +292,16 @@ def _parse_config(raw: dict) -> AppConfig:
         system_device=str(meeting_raw.get("system_device", "")).strip(),
         mic_label=str(meeting_raw.get("mic_label", "\U0001f3a4 Me")).strip() or "\U0001f3a4 Me",
         system_label=str(meeting_raw.get("system_label", "\U0001f50a Them")).strip() or "\U0001f50a Them",
-        silence_rms=float(meeting_raw.get("silence_rms", 0.008)),
         silence_hold_ms=int(meeting_raw.get("silence_hold_ms", 800)),
         min_segment_ms=int(meeting_raw.get("min_segment_ms", 400)),
         max_segment_seconds=float(meeting_raw.get("max_segment_seconds", 20.0)),
         voice_frame_rms=float(meeting_raw.get("voice_frame_rms", 0.045)),
         voice_max_zcr=float(meeting_raw.get("voice_max_zcr", 0.32)),
         voice_min_voiced_ratio=float(meeting_raw.get("voice_min_voiced_ratio", 0.30)),
+        drop_mic_echo=bool(meeting_raw.get("drop_mic_echo", True)),
     )
     if meeting.system_source not in {"tap", "device", "off"}:
         raise ConfigError("meeting.system_source must be 'tap', 'device', or 'off'")
-    if meeting.silence_rms < 0:
-        raise ConfigError("meeting.silence_rms must be >= 0")
     if meeting.silence_hold_ms <= 0:
         raise ConfigError("meeting.silence_hold_ms must be positive")
     if meeting.max_segment_seconds <= 0:
@@ -398,7 +401,6 @@ binary_path = {_s(config.model.binary_path)}
 
 [recording]
 sample_rate = {config.recording.sample_rate}
-channels = {config.recording.channels}
 block_duration_ms = {config.recording.block_duration_ms}
 
 [transcript]
@@ -412,13 +414,13 @@ system_source = {_s(config.meeting.system_source)}
 system_device = {_s(config.meeting.system_device)}
 mic_label = {_s(config.meeting.mic_label)}
 system_label = {_s(config.meeting.system_label)}
-silence_rms = {config.meeting.silence_rms}
 silence_hold_ms = {config.meeting.silence_hold_ms}
 min_segment_ms = {config.meeting.min_segment_ms}
 max_segment_seconds = {config.meeting.max_segment_seconds}
 voice_frame_rms = {config.meeting.voice_frame_rms}
 voice_max_zcr = {config.meeting.voice_max_zcr}
 voice_min_voiced_ratio = {config.meeting.voice_min_voiced_ratio}
+drop_mic_echo = {"true" if config.meeting.drop_mic_echo else "false"}
 
 [logging]
 level = {_s(config.logging.level)}

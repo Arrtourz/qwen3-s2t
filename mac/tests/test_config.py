@@ -95,3 +95,20 @@ def test_legacy_paste_and_recording_mode_keys_are_ignored():
     raw["recording"] = {"mode": "manual", "input_device": "x", "continuous_window_seconds": 60}
     cfg = _parse_config(raw)
     assert not hasattr(cfg, "paste") and not hasattr(cfg.recording, "mode")
+
+
+def test_language_auto_and_empty_mean_detect():
+    # "" used to silently become "Chinese"; both now mean auto-detect.
+    assert _parse_config({"model": {}}).language == "auto"
+    assert _parse_config({"language": "", "model": {}}).language == "auto"
+    assert _parse_config({"language": "AUTO", "model": {}}).language == "auto"
+    assert _parse_config({"language": "English", "model": {}}).language == "English"
+
+
+def test_dropped_fields_are_ignored_in_old_configs():
+    raw = _minimal_raw()
+    raw["recording"] = {"channels": 1}
+    raw["meeting"] = {"silence_rms": 0.008}
+    cfg = _parse_config(raw)
+    assert not hasattr(cfg.recording, "channels") and not hasattr(cfg.meeting, "silence_rms")
+    assert cfg.meeting.drop_mic_echo is True

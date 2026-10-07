@@ -84,7 +84,6 @@ class _StreamWorker:
         self._resampler_ratio = 1.0
         self._segmenter = SilenceSegmenter(
             sample_rate=recording.sample_rate,
-            silence_rms=meeting.silence_rms,
             silence_hold_ms=meeting.silence_hold_ms,
             min_segment_ms=meeting.min_segment_ms,
             max_segment_seconds=meeting.max_segment_seconds,
@@ -145,7 +144,6 @@ class _TapWorker:
         self._tap = SystemAudioTap()
         self._segmenter = SilenceSegmenter(
             sample_rate=recording.sample_rate,
-            silence_rms=meeting.silence_rms,
             silence_hold_ms=meeting.silence_hold_ms,
             min_segment_ms=meeting.min_segment_ms,
             max_segment_seconds=meeting.max_segment_seconds,

@@ -46,7 +46,8 @@ class SilenceSegmenter:
         # Adaptive mode tracks the ambient noise floor and treats a block as
         # speech when it rises clearly above it. This makes capture work across
         # very different mic levels (low-output AirPods vs a loud built-in mic)
-        # without per-device tuning. `silence_rms` becomes an absolute floor.
+        # without per-device tuning. `silence_rms` applies only when adaptive=False;
+        # the adaptive path uses a fixed 0.0015 floor (see push()).
         self.adaptive = adaptive
         self.speech_factor = speech_factor
         self.target_peak = target_peak
