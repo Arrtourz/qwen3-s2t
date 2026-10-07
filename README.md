@@ -2,8 +2,17 @@
 
 This repository is now organized into platform-specific subprojects:
 
+- `mac/`: macOS menu-bar meeting transcriber (mic + system audio, Apple Silicon)
 - `windows/`: the active Windows 11 tray app
 - `linux/`: the Ubuntu / PulseAudio implementation, now aligned with shared model/device runtime options
+
+## macOS
+
+Start with `mac/README.md`.
+
+```bash
+cd mac
+```
 
 ## Windows
 
