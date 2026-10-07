@@ -119,7 +119,8 @@ class SpeechToTextController:
         if status == "ok":
             self.tray.set_loading(False)
             self._register_hotkey_main_thread()
-            self.tray.notify("s2t", "Ready. Click the menu to Start Meeting.")
+            # Launch silently: the menu-bar icon switching from ⏳ to 🎙 already
+            # says "ready". Only a failed startup gets a notification.
         elif status == "error":
             self.tray.set_error()
             self.tray.notify("s2t startup failed", self._init_message)
@@ -295,15 +296,9 @@ class SpeechToTextController:
             self._meeting_active = True
             if self.tray is not None:
                 self.tray.set_recording(True)
-            beep("start")
+            # Start silently, no tone and no banner; the icon turning 🔴 is the
+            # signal. (The tone also played into the system tap.)
             log.info("Meeting started with streams: %s", labels)
-            # macOS gives no API to set the Control Center mic mode, so remind the
-            # user to enable Voice Isolation — it markedly raises the voiced-frame
-            # ratio of their speech and suppresses colleague/background voices.
-            self._notify(
-                "Meeting started",
-                "Tip: set Mic Mode to Voice Isolation in Control Center for best results.",
-            )
 
     def end_meeting(self) -> None:
         with self._meeting_lock:

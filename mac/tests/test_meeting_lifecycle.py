@@ -169,3 +169,25 @@ def test_evicted_segments_do_not_block_join():
     done = threading.Event()
     threading.Thread(target=lambda: (c._queue.join(), done.set()), daemon=True).start()
     assert done.wait(2), "queue.join() hung: evicted items were never marked done"
+
+
+def test_start_meeting_is_silent(monkeypatch):
+    import s2t.core.controller as ctl
+    beeps, notes = [], []
+    monkeypatch.setattr(ctl, "beep", beeps.append)
+    c = _controller(FakeBackend())
+    c._notify = lambda *a: notes.append(a)
+    c.start_meeting()
+    assert beeps == [] and notes == []
+    c.end_meeting(); c._finisher.join(timeout=5)
+    _shutdown(c)
+
+
+def test_successful_launch_is_silent():
+    c = SpeechToTextController.__new__(SpeechToTextController)
+    notes = []
+    c.tray = types.SimpleNamespace(set_loading=lambda _: None, notify=lambda *a: notes.append(a), set_error=lambda: None)
+    c._register_hotkey_main_thread = lambda: None
+    c._init_status = "ok"
+    c._apply_init_status()
+    assert notes == []
