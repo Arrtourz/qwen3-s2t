@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
+import time
+import wave
+from pathlib import Path
 from typing import Callable
 
 import numpy as np
@@ -11,6 +15,41 @@ from ...core.segmenter import SilenceSegmenter
 
 
 log = logging.getLogger(__name__)
+
+# Debug only: with S2T_RECORD_RAW=1 each stream's raw 16 kHz audio is written
+# straight to disk (no buffering in memory), for offline echo-cancellation tests.
+def _raw_recorder(label: str, recording) -> "_RawWav | None":
+    if os.environ.get("S2T_RECORD_RAW", "").strip().lower() not in {"1", "true", "yes", "on"}:
+        return None
+    from ...core.config import app_data_dir
+    d = app_data_dir() / "raw-audio"; d.mkdir(parents=True, exist_ok=True)
+    safe = "mic" if "Me" in label else "system"
+    return _RawWav(d / f"{time.strftime('%Y%m%d-%H%M%S')}_{safe}.wav", recording.sample_rate)
+
+
+class _RawWav:
+    def __init__(self, path: Path, sample_rate: int) -> None:
+        self.path = path
+        self._w = wave.open(str(path), "wb")
+        self._w.setnchannels(1); self._w.setsampwidth(2); self._w.setframerate(sample_rate)
+        self._lock = threading.Lock()
+        self.first_sample_monotonic: float | None = None
+        log.info("Recording raw audio to %s", path)
+
+    def write(self, block: np.ndarray) -> None:
+        with self._lock:
+            if self._w is None:
+                return
+            if self.first_sample_monotonic is None:
+                self.first_sample_monotonic = time.monotonic()
+                log.info("Raw audio %s first sample at monotonic %.3f", self.path.name, self.first_sample_monotonic)
+            self._w.writeframes((np.clip(block, -1.0, 1.0) * 32767).astype(np.int16).tobytes())
+
+    def close(self) -> None:
+        with self._lock:
+            if self._w is not None:
+                self._w.close(); self._w = None
+
 
 # A completed utterance: (speaker_label, audio_16k_float32)
 SegmentCallback = Callable[[str, np.ndarray], None]
@@ -75,8 +114,14 @@ class _StreamWorker:
         recording: RecordingConfig,
         meeting: MeetingConfig,
         on_segment: SegmentCallback,
+        echo_canceller=None,
+        is_reference: bool = False,
     ) -> None:
         self.device = device
+        # With a canceller, the mic stream is cleaned by it; a system stream
+        # (e.g. BlackHole) instead feeds it as the reference.
+        self._aec = echo_canceller
+        self._is_reference = is_reference
         self.label = label
         self.recording = recording
         self.on_segment = on_segment
@@ -90,6 +135,7 @@ class _StreamWorker:
         )
         self._blocksize = max(1, int(recording.sample_rate * recording.block_duration_ms / 1000))
         self._lock = threading.Lock()
+        self._raw = _raw_recorder(label, recording)
 
     def start(self) -> bool:
         import sounddevice as sd
@@ -119,6 +165,8 @@ class _StreamWorker:
                 finally:
                     self._stream.close()
                     self._stream = None
+        if self._raw is not None:
+            self._raw.close()
         # Flush any trailing speech as a final segment.
         tail = self._segmenter.flush()
         if tail is not None and tail.size:
@@ -128,6 +176,13 @@ class _StreamWorker:
         if status:
             log.debug("Meeting stream status (%s): %s", self.label, status)
         block = indata.copy().reshape(-1)
+        if self._raw is not None:
+            self._raw.write(block)  # raw = before echo cancellation
+        if self._aec is not None:
+            if self._is_reference:
+                self._aec.feed_reference(block)
+            else:
+                block = self._aec.process_mic(block)
         for segment in self._segmenter.push(block):
             self.on_segment(self.label, segment)
 
@@ -135,13 +190,16 @@ class _StreamWorker:
 class _TapWorker:
     """Owns a Core Audio system tap + segmenter, resampling to 16k."""
 
-    def __init__(self, *, label: str, recording: RecordingConfig, meeting: MeetingConfig, on_segment: SegmentCallback) -> None:
+    def __init__(self, *, label: str, recording: RecordingConfig, meeting: MeetingConfig, on_segment: SegmentCallback, echo_canceller=None) -> None:
         from .system_tap import SystemAudioTap
+
+        self._aec = echo_canceller
 
         self.label = label
         self.target_sr = recording.sample_rate
         self.on_segment = on_segment
         self._tap = SystemAudioTap()
+        self._raw = _raw_recorder(label, recording)
         self._segmenter = SilenceSegmenter(
             sample_rate=recording.sample_rate,
             silence_hold_ms=meeting.silence_hold_ms,
@@ -162,12 +220,18 @@ class _TapWorker:
 
     def stop(self) -> None:
         self._tap.stop()
+        if self._raw is not None:
+            self._raw.close()
         tail = self._segmenter.flush()
         if tail is not None and tail.size:
             self.on_segment(self.label, tail)
 
     def _on_block(self, mono: np.ndarray, sample_rate: int) -> None:
         block = _resample_mono(mono, sample_rate, self.target_sr)
+        if self._raw is not None:
+            self._raw.write(block)
+        if self._aec is not None:
+            self._aec.feed_reference(block)
         for segment in self._segmenter.push(block):
             self.on_segment(self.label, segment)
 
@@ -199,6 +263,13 @@ class MeetingRecorder:
             #   2. open the mic stream — after the restart, stays valid
             #   3. tap.open_stream()   — no restart; coexists with the mic stream
             src = self.meeting.system_source
+            # One canceller per meeting, shared by the mic (cleaned) and the
+            # system stream (reference). Only useful when there is a reference.
+            aec = None
+            if self.meeting.echo_cancellation and src in ("tap", "device"):
+                from ...core.aec import make_echo_canceller
+
+                aec = make_echo_canceller(self.recording.sample_rate)
             tap: _TapWorker | None = None
             if src == "tap":
                 candidate = _TapWorker(
@@ -206,6 +277,7 @@ class MeetingRecorder:
                     recording=self.recording,
                     meeting=self.meeting,
                     on_segment=on_segment,
+                    echo_canceller=aec,
                 )
                 if candidate.prepare():
                     tap = candidate
@@ -221,6 +293,7 @@ class MeetingRecorder:
                 recording=self.recording,
                 meeting=self.meeting,
                 on_segment=on_segment,
+                echo_canceller=aec,
             )
             if mic.start():
                 self._workers.append(mic)
@@ -233,6 +306,8 @@ class MeetingRecorder:
                     recording=self.recording,
                     meeting=self.meeting,
                     on_segment=on_segment,
+                    echo_canceller=aec,
+                    is_reference=True,
                 )
                 if sysw.start():
                     self._workers.append(sysw)

@@ -5,6 +5,7 @@ pynput>=1.7.7
 qwen-asr>=0.0.6
 rumps>=0.4.0
 sounddevice>=0.4.7
+livekit>=1.1  # WebRTC echo cancellation (meeting.echo_cancellation)
 torch>=2.3.0
 transformers>=4.50.0
 

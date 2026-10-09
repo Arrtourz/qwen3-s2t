@@ -80,6 +80,10 @@ class MeetingConfig:
     voice_frame_rms: float = 0.045
     voice_max_zcr: float = 0.32
     voice_min_voiced_ratio: float = 0.30
+    # Remove speaker playback from the mic (WebRTC AEC3) using the system
+    # audio as reference, so laptop-speaker meetings stop transcribing the
+    # other party twice. Adds ~16-18 MB. No effect with system_source = "off".
+    echo_cancellation: bool = True
 
 
 @dataclass(frozen=True)
@@ -207,6 +211,7 @@ max_segment_seconds = 20.0
 voice_frame_rms = 0.045
 voice_max_zcr = 0.32
 voice_min_voiced_ratio = 0.30
+echo_cancellation = true
 
 [logging]
 level = "INFO"
@@ -293,6 +298,7 @@ def _parse_config(raw: dict) -> AppConfig:
         voice_frame_rms=float(meeting_raw.get("voice_frame_rms", 0.045)),
         voice_max_zcr=float(meeting_raw.get("voice_max_zcr", 0.32)),
         voice_min_voiced_ratio=float(meeting_raw.get("voice_min_voiced_ratio", 0.30)),
+        echo_cancellation=bool(meeting_raw.get("echo_cancellation", True)),
     )
     if meeting.system_source not in {"tap", "device", "off"}:
         raise ConfigError("meeting.system_source must be 'tap', 'device', or 'off'")
@@ -414,6 +420,7 @@ max_segment_seconds = {config.meeting.max_segment_seconds}
 voice_frame_rms = {config.meeting.voice_frame_rms}
 voice_max_zcr = {config.meeting.voice_max_zcr}
 voice_min_voiced_ratio = {config.meeting.voice_min_voiced_ratio}
+echo_cancellation = {"true" if config.meeting.echo_cancellation else "false"}
 
 [logging]
 level = {_s(config.logging.level)}

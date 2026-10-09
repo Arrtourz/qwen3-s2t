@@ -111,3 +111,9 @@ def test_dropped_fields_are_ignored_in_old_configs():
     raw["meeting"] = {"silence_rms": 0.008}
     cfg = _parse_config(raw)
     assert not hasattr(cfg.recording, "channels") and not hasattr(cfg.meeting, "silence_rms")
+
+
+def test_echo_cancellation_on_by_default_and_switchable():
+    assert _parse_config(_minimal_raw()).meeting.echo_cancellation is True
+    raw = _minimal_raw(); raw["meeting"] = {"echo_cancellation": False}
+    assert _parse_config(raw).meeting.echo_cancellation is False
