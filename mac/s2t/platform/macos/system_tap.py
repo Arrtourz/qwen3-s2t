@@ -105,7 +105,15 @@ class SystemAudioTap:
                 "name": agg_name,
                 "private": 1,
                 "stacked": 0,
-                "tapautostart": 1,
+                # tapautostart MUST stay 0. With 1, every other app that starts
+                # audio IO while this tap exists stalls for ~35s inside coreaudiod
+                # (StartIOThread ... Error 0x3C = ETIMEDOUT): Zoom could not join a
+                # call if a meeting was started here first. Measured from a second
+                # process opening the mic: 38.7s with autostart vs 0.12s without
+                # (0.13s with no tap at all). Giving the aggregate a main/clock
+                # sub-device or drift compensation did not help. The tap still
+                # runs: it starts with this aggregate's own input stream.
+                "tapautostart": 0,
                 "taps": [{"uid": uid, "drift": 0}],
                 "subdevices": [],
             }
