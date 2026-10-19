@@ -590,5 +590,9 @@ livekit 延迟导入，导入失败时照常录音、不做回声消除。
 - 合成测试的"人声"音量和真实麦克风对不上（连没处理的音频都卡在 VAD 阈值上），判断不了人声损伤，要用真实录音
 - 波形相关度不适合当指标（相位和延迟敏感），要用"转写结果"判断
 - 测试素材要用有人说话的视频，纯音乐只会输出 "Music."，被当填充词过滤掉
-- 调试开关 `S2T_RECORD_RAW=1`（用 `open --env S2T_RECORD_RAW=1 dist/s2t.app` 启动）：把原始麦克风和系统音频写成 wav，
+- 调试开关 `S2T_RECORD_RAW=1`（用 `open --env S2T_RECORD_RAW=1 /Applications/s2t.app` 启动）：把原始麦克风和系统音频写成 wav，
   存到 `~/.config/s2t/raw-audio/`。**平时别开**，否则每场会议都会存原始音频。
+
+- **只保留 `/Applications/s2t.app`**（2026-10-19）：原来还有一份 `mac/dist/s2t.app`，两份都是 alias 模式、跑同一个
+  `run_app.py`，导致启动台里出现两个图标。`dist/` 那份已删除（git 本来就没跟踪它）。
+  重新打包：`.venv/bin/python setup.py py2app -A`，然后把 `dist/s2t.app` 拖到"应用程序"，替换旧的那份。
