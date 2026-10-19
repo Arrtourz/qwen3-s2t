@@ -9,6 +9,37 @@ import rumps
 
 log = logging.getLogger(__name__)
 
+# Menu-bar look (user's pick from rendered options): a small monochrome circle,
+# hollow when ready and filled while recording, so the menu bar stays quiet. As
+# template images they follow light/dark menu bars; nothing is ever red.
+# (state: SF Symbol, drawn greyed-out, emoji fallback if the symbol is missing)
+_STATES = {
+    "loading": ("circle", True, "⏳"),
+    "idle": ("circle", False, "🎙"),
+    "recording": ("circle.fill", False, "🔴"),
+    "error": ("exclamationmark.circle", False, "⚠️"),
+}
+_SYMBOL_POINT_SIZE = 9.0
+
+
+def _symbol_image(name: str):
+    """A template NSImage for an SF Symbol, or None if unavailable."""
+    try:
+        from AppKit import NSFontWeightRegular, NSImage, NSImageSymbolConfiguration
+
+        image = NSImage.imageWithSystemSymbolName_accessibilityDescription_(name, "s2t")
+        if image is None:
+            return None
+        config = NSImageSymbolConfiguration.configurationWithPointSize_weight_(
+            _SYMBOL_POINT_SIZE, NSFontWeightRegular
+        )
+        image = image.imageWithSymbolConfiguration_(config) or image
+        image.setTemplate_(True)  # tinted by the system to match the menu bar
+        return image
+    except Exception:
+        log.debug("SF Symbol %s unavailable", name, exc_info=True)
+        return None
+
 
 class MacTrayApp(rumps.App):
     def __init__(
@@ -22,7 +53,9 @@ class MacTrayApp(rumps.App):
         on_memory_report: Callable[[], None],
         on_exit: Callable[[], None],
     ) -> None:
-        super().__init__("s2t", title="🎙", quit_button=None)
+        super().__init__("s2t", title=None, quit_button=None)
+        self._state_images = {state: _symbol_image(symbol) for state, (symbol, _, _) in _STATES.items()}
+        self._show("loading")
         self._on_start_meeting = on_start_meeting
         self._on_end_meeting = on_end_meeting
         self._on_settings = on_settings
@@ -80,14 +113,38 @@ class MacTrayApp(rumps.App):
             log.debug("Notification failed", exc_info=True)
 
     def set_recording(self, active: bool) -> None:
-        self.title = "🔴" if active else "🎙"
+        self._show("recording" if active else "idle")
         self._set_meeting_menu_state(active=active)
 
     def set_loading(self, loading: bool) -> None:
-        self.title = "⏳" if loading else "🎙"
+        self._show("loading" if loading else "idle")
 
     def set_error(self) -> None:
-        self.title = "⚠️"
+        self._show("error")
+
+    def _show(self, state: str) -> None:
+        """Switch the status item to `state`. Main thread only."""
+        _symbol, greyed, emoji = _STATES[state]
+        image = self._state_images.get(state)
+        if image is None:  # no SF Symbols: keep the old emoji look
+            self._icon_nsimage = None
+            self.title = emoji
+        else:
+            # rumps reads _icon_nsimage when the status item is first built and
+            # on setStatusBarIcon(); set the image before clearing the title so
+            # rumps never falls back to showing the app name.
+            self._icon_nsimage = image
+            self.title = None
+        nsapp = getattr(self, "_nsapp", None)
+        if nsapp is None:  # before run(): applied when the status item is created
+            return
+        try:
+            nsapp.setStatusBarIcon()
+            button = nsapp.nsstatusitem.button()
+            if button is not None:
+                button.setAppearsDisabled_(greyed)
+        except Exception:
+            log.debug("Could not update status item", exc_info=True)
 
     def set_ready_poller(self, callback) -> None:
         """Register a callback polled on the main thread (~4x/sec).

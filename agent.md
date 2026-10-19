@@ -596,3 +596,7 @@ livekit 延迟导入，导入失败时照常录音、不做回声消除。
 - **只保留 `/Applications/s2t.app`**（2026-10-19）：原来还有一份 `mac/dist/s2t.app`，两份都是 alias 模式、跑同一个
   `run_app.py`，导致启动台里出现两个图标。`dist/` 那份已删除（git 本来就没跟踪它）。
   重新打包：`.venv/bin/python setup.py py2app -A`，然后把 `dist/s2t.app` 拖到"应用程序"，替换旧的那份。
+
+- **菜单栏图标改成小圆点**（2026-10-19，用户从渲染出来的 6 个方案里选了 B）：就绪 ○ `circle`、录音中 ● `circle.fill`、
+  加载中是灰显的 ○、出错 `exclamationmark.circle`。都是 9 pt 的单色 SF Symbol 模板图，跟随菜单栏颜色，不再用红色 emoji；
+  拿不到 SF Symbol 时退回 emoji。录音时的橙色麦克风是 macOS 的隐私指示，app 无法隐藏。
