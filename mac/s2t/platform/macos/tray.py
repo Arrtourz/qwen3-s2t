@@ -14,7 +14,7 @@ log = logging.getLogger(__name__)
 # template images they follow light/dark menu bars; nothing is ever red.
 # (state: SF Symbol, drawn greyed-out, emoji fallback if the symbol is missing)
 _STATES = {
-    "loading": ("circle", True, "⏳"),
+    "loading": ("ellipsis.circle", False, "⏳"),  # chosen from rendered options
     "idle": ("circle", False, "🎙"),
     "recording": ("circle.fill", False, "🔴"),
     "error": ("exclamationmark.circle", False, "⚠️"),
