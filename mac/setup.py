@@ -14,6 +14,9 @@ from setuptools import setup
 APP = ["run_app.py"]
 OPTIONS = {
     "argv_emulation": False,
+    # Filled-mic app icon (Finder / Launchpad). A rebuild changes the ad-hoc
+    # signature, so macOS asks for Microphone + System Audio permission again.
+    "iconfile": "assets/s2t.icns",
     "plist": {
         "CFBundleName": "s2t",
         "CFBundleDisplayName": "s2t Meeting Transcriber",

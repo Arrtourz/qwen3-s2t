@@ -600,3 +600,7 @@ livekit 延迟导入，导入失败时照常录音、不做回声消除。
 - **菜单栏图标改成小圆点**（2026-10-19，用户从渲染出来的 6 个方案里选了 B）：就绪 ○ `circle`、录音中 ● `circle.fill`、
   加载中是灰显的 ○、出错 `exclamationmark.circle`。都是 9 pt 的单色 SF Symbol 模板图，跟随菜单栏颜色，不再用红色 emoji；
   拿不到 SF Symbol 时退回 emoji。录音时的橙色麦克风是 macOS 的隐私指示，app 无法隐藏。
+- **app 图标换成实心麦克风**（2026-10-19）：`mac/assets/s2t.icns`，深色圆角方块配白色 SF Symbol `mic.fill`；
+  已写进 `setup.py` 的 `iconfile`。现有的 `/Applications/s2t.app` 是用 `NSWorkspace.setIcon` 加的**自定义图标**
+  （包根目录下的 `Icon\r` 文件），**没有动 Contents**：CDHash 改前改后都是 `ab6e58ff…`，所以麦克风和系统录音权限不用重新授权。
+  不要直接替换 Contents 里的 icns：ad-hoc 签名失效后，系统会当成新 app，权限需要重新授予。
